@@ -152,7 +152,9 @@ class Harness:
         return env
 
     def _make_codex_home(self, run_dir: Path, skills: list[Path] | None = None) -> Path:
-        src = Path(self.cfg["codex_home_source"])
+        src = Path(os.path.expandvars(self.cfg.get("codex_home_source", "~/.codex"))).expanduser()
+        if "${" in src.as_posix():
+            src = Path.home() / ".codex"
         home = run_dir / "codex_home"
         home.mkdir(parents=True, exist_ok=True)
         for name in ("config.toml", "auth.json"):

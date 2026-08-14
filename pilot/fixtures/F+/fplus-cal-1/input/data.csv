@@ -1,0 +1,13 @@
+id,customer,date,category,amount
+1,alice,2026-01-05,A,10.5
+2,bob,2026/01/07,A,20
+2,bob,2026/01/07,A,20
+3,carol,,B,
+4,dave,2026-02-01,B,7.25
+5,eve,not-a-date,C,3
+5,eve,2026-02-03,C,3
+6,alice,2026-02-10,A,15
+7,frank,2026-03-01,B,12.75
+8,grace,2026-03-15,A,
+9,henry,2026-04-01,C,9.5
+10,ida,2026-04-12,B,5

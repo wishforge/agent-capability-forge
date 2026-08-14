@@ -1,0 +1,28 @@
+{
+  "schema_version": "pilot_config_v1",
+  "scope": "EXPERIMENT_ONLY",
+  "family": "F+",
+  "model": {
+    "provider": "deepseek",
+    "name": "deepseek-v4-flash",
+    "reasoning_effort": "max",
+    "temperature": null,
+    "seed": null
+  },
+  "limits": {
+    "timeout_seconds": 900,
+    "output_bytes": 1048576
+  },
+  "sandbox": {
+    "image": "python:3.12-slim",
+    "network": false
+  },
+  "prices": {
+    "input_token_usd": 0.0,
+    "output_token_usd": 0.0,
+    "human_minute_usd": 0.0,
+    "sandbox_minute_usd": 0.0,
+    "price_note": "rehearsal: USD rates zeroed until official provider rates are locked"
+  },
+  "codex_home_source": "${CODEX_HOME}"
+}

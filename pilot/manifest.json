@@ -1,0 +1,62 @@
+{
+  "schema_version": "task_manifest_v1",
+  "families": [
+    {
+      "family": "F+",
+      "role": "calibration",
+      "description": "CSV -> cleaning rules -> statistical report",
+      "values": {"low": 50, "mid": 100, "high": 200},
+      "deltas": [0.05, 0.10, 0.20],
+      "oracle": {
+        "kind": "check_command",
+        "command": ["python", "/oracle/check.py"],
+        "script": "oracles/check.py"
+      },
+      "prompt_template": "You are working in the current workspace. Complete this task:\n\n1. Read data/input.csv (columns: id,customer,date,category,amount).\n2. Remove exact duplicate rows.\n3. Drop rows where id, customer, or category is empty/missing.\n4. Fill missing numeric values in the amount column with 0.\n5. Normalize date values to YYYY-MM-DD; drop rows whose date cannot be parsed.\n6. Sort by id ascending.\n\nWrite the cleaned data to data/cleaned.csv and write report.md in the workspace root containing exactly these lines (floats formatted with 2 decimals):\ntotal_rows: <int>\ntotal_amount: <number>\nunique_customers: <int>\nmean_amount: <number>\n\nRun your solution to verify the output before finishing.",
+      "formation_tasks": [
+        {
+          "task_id": "fplus-cal-1",
+          "prompt_ref": "prompt_template",
+          "fixture_ref": "fixtures/F+/fplus-cal-1",
+          "oracle": {"kind": "check_command", "command": ["python", "/oracle/check.py"]},
+          "limits": {"timeout_seconds": 900, "output_bytes": 1048576}
+        },
+        {
+          "task_id": "fplus-cal-2",
+          "prompt_ref": "prompt_template",
+          "fixture_ref": "fixtures/F+/fplus-cal-2",
+          "oracle": {"kind": "check_command", "command": ["python", "/oracle/check.py"]},
+          "limits": {"timeout_seconds": 900, "output_bytes": 1048576}
+        }
+      ],
+      "future_tasks": [
+        {
+          "task_id": "fplus-future-1",
+          "prompt_ref": "prompt_template",
+          "fixture_ref": "fixtures/F+/fplus-future-1",
+          "oracle": {"kind": "check_command", "command": ["python", "/oracle/check.py"]},
+          "limits": {"timeout_seconds": 900, "output_bytes": 1048576}
+        },
+        {
+          "task_id": "fplus-future-2",
+          "prompt_ref": "prompt_template",
+          "fixture_ref": "fixtures/F+/fplus-future-2",
+          "oracle": {"kind": "check_command", "command": ["python", "/oracle/check.py"]},
+          "limits": {"timeout_seconds": 900, "output_bytes": 1048576}
+        }
+      ],
+      "evaluation_tasks": [
+        {
+          "task_id": "fplus-novel",
+          "fixture_ref": "fixtures/F+/fplus-novel",
+          "role": "novel_input_test"
+        },
+        {
+          "task_id": "fplus-novel2",
+          "fixture_ref": "fixtures/F+/fplus-novel2",
+          "role": "independent_reuse"
+        }
+      ]
+    }
+  ]
+}

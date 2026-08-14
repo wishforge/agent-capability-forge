@@ -1,0 +1,8 @@
+{
+  "schema_version": "b1_curated_skill_v1",
+  "name": "csv-clean-statistical-report",
+  "family": "F+",
+  "human_minutes": 10,
+  "human_confirmed": true,
+  "skill_path": "pilot/skills/curated/F+/csv-clean-statistical-report/SKILL.md"
+}

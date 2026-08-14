@@ -1,19 +1,25 @@
 ---
 name: csv-clean-statistical-report
-description: Clean an order/sales CSV (dedupe, drop incomplete rows, fill missing amounts, normalize dates, sort by id) and generate a Markdown statistical report. Use when a task asks for CSV cleaning plus total rows, total amount, unique customers, and mean amount.
+description: Clean an order/sales CSV (remove exact duplicates, drop rows missing id/customer/category, fill missing amounts with 0, normalize dates to YYYY-MM-DD, sort by id) and write a Markdown statistical report with total rows, total amount, unique customers, and mean amount. Use when a task asks for CSV cleaning plus these statistics.
 ---
 
 # CSV Clean + Statistical Report
 
-Use `scripts/main.py` to do the whole job:
+Run the provided script to clean the CSV and generate the report:
 
-```
+```bash
 python scripts/main.py <input.csv> <outdir>
 ```
 
-The script removes exact duplicate rows, drops rows missing id/customer/category, fills missing amount values with 0, normalizes dates to YYYY-MM-DD (dropping unparseable dates), sorts by id ascending, and writes `report.md` into the output directory.
+The script:
 
-`report.md` contains exactly these four lines, with floats formatted to 2 decimals:
+1. Removes exact duplicate rows.
+2. Drops rows where id, customer, or category is empty or missing.
+3. Fills missing amount values with 0.
+4. Normalizes dates to YYYY-MM-DD and drops rows with unparseable dates.
+5. Sorts rows by id ascending.
+
+It writes `report.md` into `<outdir>` with exactly these four lines, with numeric values formatted to 2 decimals:
 
 ```
 total_rows: <int>

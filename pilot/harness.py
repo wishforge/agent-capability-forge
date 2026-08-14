@@ -54,6 +54,12 @@ def _file_sha256(path: Path) -> str:
     return _sha256(path.read_bytes())
 
 
+def _dir_digest(directory: Path) -> str:
+    files = {p.relative_to(directory).as_posix(): _file_sha256(p)
+             for p in sorted(directory.rglob("*")) if p.is_file()}
+    return _sha256(_canonical({"files": files}))
+
+
 def _canonical(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -152,8 +158,9 @@ class Harness:
         return env
 
     def _make_codex_home(self, run_dir: Path, skills: list[Path] | None = None) -> Path:
-        src = Path(os.path.expandvars(self.cfg.get("codex_home_source", "~/.codex"))).expanduser()
-        if "${" in src.as_posix():
+        src_raw = self.cfg.get("codex_home_source", "~/.codex")
+        src = Path(os.path.expandvars(src_raw)).expanduser()
+        if "${" in src_raw:
             src = Path.home() / ".codex"
         home = run_dir / "codex_home"
         home.mkdir(parents=True, exist_ok=True)
@@ -265,11 +272,30 @@ class Harness:
             "generation_input_digest": None, "proposal_digest": None,
             "runtime_metrics": None, "output_dir": str(run_dir / "work"),
             "last_message": "", "sandbox_elapsed_s": None, "notes": None,
+            "treatment": None,
         }
+
+    def _skill_treatment(self, run_dir: Path, skill_dir: Path, name: str) -> dict:
+        """Deterministic harness-level injection record: mounted copy + digest match."""
+        mounted = run_dir / "codex_home" / "skills" / name
+        mounted_digest = _dir_digest(mounted)
+        expected_digest = _dir_digest(skill_dir)
+        evidence = {
+            "kind": "skill_injection",
+            "injected_by": "harness",
+            "mounted_path": str(mounted),
+            "source_path": str(skill_dir),
+            "mounted_digest": mounted_digest,
+            "expected_digest": expected_digest,
+            "digest_match": mounted_digest == expected_digest,
+        }
+        return {"type": "skill", "used": evidence["digest_match"], "ref": name,
+                "digest": mounted_digest, "evidence": evidence}
 
     def _write_event(self, event: dict) -> None:
         existing = {e.get("sandbox_id") for e in self._load_events()}
-        if event.get("sandbox_id") in existing:
+        sandbox_id = event.get("sandbox_id")
+        if sandbox_id is not None and sandbox_id in existing:
             return
         with self.events_path.open("a") as fh:
             fh.write(json.dumps(event, sort_keys=True) + "\n")
@@ -565,6 +591,12 @@ class Harness:
             independent_fixtures=[("fplus-novel2", self._fixture("fplus-novel2"))])
         name = proposal["name"]
         if evaluation["verdict"] == "PASS":
+            old_entry = self.registry_root / "F+" / f"{name}.json"
+            if self.force and old_entry.exists():
+                old_artifact = json.loads(old_entry.read_text()).get("artifact_dir")
+                old_entry.unlink()
+                if old_artifact:
+                    shutil.rmtree(old_artifact, ignore_errors=True)
             entry = registry.promote("F+", name, cand, evaluation, self.registry_root)
             (self.state / "b3_entry.json").write_text(
                 json.dumps({"name": name, "capability_id": entry["capability_id"]}, indent=2) + "\n")
@@ -576,19 +608,58 @@ class Harness:
         return {"candidate": made, "validation": validation, "evaluation": evaluation,
                 "registry_entry": entry}
 
+    def phase_b1_freeze(self) -> dict:
+        """B1: freeze operator-curated skill -> b1_skill_ref.json (READY/BLOCKED record)."""
+        cfg_path = ROOT / "b1_curated_skill.json"
+        cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        name = cfg.get("name")
+        src = ROOT / "skills" / "curated" / "F+" / name if name else None
+        if not name or not src or not (src / "SKILL.md").exists() \
+                or cfg.get("human_minutes") is None:
+            blocked = {"status": "BLOCKED",
+                       "reason": "pilot/b1_curated_skill.json with name + human_minutes "
+                                 "and pilot/skills/curated/F+/<name>/SKILL.md required"}
+            (self.state / "b1_readiness.json").write_text(json.dumps(blocked, indent=2) + "\n")
+            return blocked
+        if (self.state / "b1_skill_ref.json").exists() and not self.force:
+            return json.loads((self.state / "b1_skill_ref.json").read_text())
+        frozen = ROOT / "skills" / "frozen" / "B1" / name
+        if frozen.exists():
+            shutil.rmtree(frozen)
+        shutil.copytree(src, frozen)
+        skill_ref = {
+            "name": name, "path": str(frozen), "digest": _dir_digest(frozen),
+            "frozen_at": _now(), "human_minutes": cfg["human_minutes"],
+        }
+        (self.state / "b1_skill_ref.json").write_text(json.dumps(skill_ref, indent=2) + "\n")
+        ready = {"status": "READY", "skill_ref": skill_ref}
+        (self.state / "b1_readiness.json").write_text(json.dumps(ready, indent=2) + "\n")
+        self._write_event({"kind": "freeze", "arm": "b1",
+                           "human_min": cfg["human_minutes"], "note": name})
+        return ready
+
     def phase_future(self, arm: str) -> list[str]:
         self._check_docker()
         run_ids = []
-        if arm == "b2":
+        if arm == "b0":
+            skill_dir = None
+            name = None
+        elif arm == "b1":
+            ref = json.loads((self.state / "b1_skill_ref.json").read_text())
+            skill_dir = Path(ref["path"])
+            name = ref["name"]
+        elif arm == "b2":
             skill_ref = json.loads((self.state / "skill_ref.json").read_text())
             skill_dir = Path(skill_ref["path"])
             name = skill_ref["name"]
-        else:
+        elif arm == "b3":
             entry_meta = json.loads((self.state / "b3_entry.json").read_text())
             entry = registry.discover(self.registry_root, "F+", entry_meta["name"])
             if entry is None:
                 raise RuntimeError("no promoted capability for B3 future runs")
             name = entry["name"]
+        else:
+            raise RuntimeError(f"unknown arm {arm}")
         for task in self.family["future_tasks"]:
             tid = task["task_id"]
             existing = [r for r in rr.load_records(self.records_path)
@@ -600,10 +671,24 @@ class Harness:
             run_dir = self.state / "runs" / run_id
             run_dir.mkdir(parents=True)
             started = _now()
-            skills = [skill_dir] if arm == "b2" else None
+            skills = [skill_dir] if arm in ("b1", "b2") else None
             meta = self._prepare_run(run_dir, self._fixture(tid), tid, arm, skills)
             rec = self._base_record(run_dir, meta, tid, arm, started)
-            if arm == "b2":
+            if arm == "b0":
+                run = self._run_codex(run_dir, self.family["prompt_template"])
+                oracle = self._oracle(task, run_dir / "work")
+                rec["oracle"] = oracle
+                rec["sandbox_elapsed_s"] = run["elapsed_s"]
+                rec["last_message"] = run["last_message"]
+                rec["treatment"] = {"type": "none", "used": False,
+                                    "ref": None, "digest": None, "evidence": None}
+                rec["notes"] = [] if run["exit_code"] == 0 else [f"codex exit={run['exit_code']}"]
+                if run["exit_code"] == 0 and run["rollout"]:
+                    rec["runtime_metrics"] = self._adapter_metrics(run_dir)
+                else:
+                    rec["oracle"] = {"verdict": "ERROR", "reason": "codex exec failed",
+                                     "stable": False, "runs": []}
+            elif arm in ("b1", "b2"):
                 prompt = f"Use the skill named {name}. Read its SKILL.md and follow it.\n\n" \
                          + self.family["prompt_template"]
                 run = self._run_codex(run_dir, prompt)
@@ -611,18 +696,22 @@ class Harness:
                 rec["oracle"] = oracle
                 rec["sandbox_elapsed_s"] = run["elapsed_s"]
                 rec["last_message"] = run["last_message"]
-                rec["skill_used"] = name in run["last_message"]
+                treatment = self._skill_treatment(run_dir, skill_dir, name)
+                rec["treatment"] = treatment
+                rec["skill_used"] = treatment["used"]
                 rec["notes"] = [] if run["exit_code"] == 0 else [f"codex exit={run['exit_code']}"]
                 if run["exit_code"] == 0 and run["rollout"]:
                     rec["runtime_metrics"] = self._adapter_metrics(run_dir)
                 else:
                     rec["oracle"] = {"verdict": "ERROR", "reason": "codex exec failed",
                                      "stable": False, "runs": []}
-            else:
+            elif arm == "b3":
                 out = run_dir / "output"
                 out.mkdir()
+                artifact_dir = Path(entry["artifact_dir"])
+                artifact_digest = _dir_digest(artifact_dir)
                 invoke = docker_launch(self.cfg["sandbox"]["image"], [
-                    (Path(entry["artifact_dir"]), "/artifact", True),
+                    (artifact_dir, "/artifact", True),
                     (self._fixture(tid) / "input", "/input", True),
                     (out, "/output", False),
                 ], ["python", "/artifact/main.py", "/input/data.csv", "/output"],
@@ -632,10 +721,22 @@ class Harness:
                 rec["output_dir"] = str(out)
                 rec["sandbox_id"] = invoke["sandbox_id"]
                 rec["sandbox_elapsed_s"] = invoke["elapsed_s"]
-                rec["capability_used"] = name
+                rec["capability_used"] = entry["capability_id"]
                 rec["invoke_result"] = {"exit_code": invoke["exit_code"],
                                         "stdout": invoke["stdout"].strip()[:500],
                                         "stderr": invoke["stderr"].strip()[:500]}
+                evidence = {
+                    "kind": "capability_invoke",
+                    "capability_id": entry["capability_id"],
+                    "artifact_dir": str(artifact_dir),
+                    "artifact_digest": artifact_digest,
+                    "sandbox_id": invoke["sandbox_id"],
+                    "command": ["python", "/artifact/main.py", "/input/data.csv", "/output"],
+                    "invoke_result": rec["invoke_result"],
+                }
+                rec["treatment"] = {"type": "capability", "used": True,
+                                    "ref": entry["capability_id"], "digest": artifact_digest,
+                                    "evidence": evidence}
                 rec["notes"] = [] if invoke["exit_code"] == 0 else ["capability invoke failed"]
             rec["ended_at"] = _now()
             rr.write_record(self.records_path, rec)
@@ -665,6 +766,7 @@ class Harness:
         future_ids = {t["task_id"] for t in self.family["future_tasks"]}
         formation = [r for r in records if r["arm"] in ("b2", "b3") and r["task_id"] in formation_ids]
         future = [r for r in records if r["task_id"] in future_ids]
+        b1_future = [r for r in future if r["arm"] == "b1"]
         b2_future = [r for r in future if r["arm"] == "b2"]
         b3_future = [r for r in future if r["arm"] == "b3"]
         gen = json.loads((self.state / "generation_meta.json").read_text()) \
@@ -690,9 +792,20 @@ class Harness:
             if skill_ref else False
         p6 = bool(entry and entry["state"] == "promoted" and entry["evaluation"]["verdict"] == "PASS")
         p7 = len(b2_future) == 2 and len(b3_future) == 2 \
-            and all(r.get("oracle", {}).get("verdict") == "PASS" for r in b2_future + b3_future)
+            and len(b1_future) == 2 \
+            and all(r.get("oracle", {}).get("verdict") == "PASS"
+                    for r in b1_future + b2_future + b3_future)
         p8 = all(not rr.validate_record(r) for r in records) \
             and (self.state / "cost.json").exists() and (self.state / "nv_report.json").exists()
+        attribution = {}
+        for r in b1_future + b2_future + b3_future:
+            errors = rr.validate_treatment(r)
+            attribution[r["run_id"]] = {
+                "arm": r["arm"], "task_id": r["task_id"],
+                "status": "VALID" if not errors else "INVALID_TREATMENT",
+                "errors": errors, "treatment": r.get("treatment"),
+            }
+        p9 = len(attribution) == 6 and all(v["status"] == "VALID" for v in attribution.values())
 
         proofs = {
             "1_two_formation_tasks_deterministic": verdict(p1, "4 formation runs, oracle verdicts stable"),
@@ -701,9 +814,20 @@ class Harness:
             "4_b2_generates_one_frozen_skill": verdict(p4, skill_ref.get("name", "missing")),
             "5_b3_generates_one_candidate": verdict(p5, "candidate manifest present"),
             "6_b3_validation_evaluation_promotion": verdict(p6, "validation/evaluation PASS + promoted"),
-            "7_b2_b3_invoke_on_future_tasks": verdict(p7, f"{len(b2_future)} B2 + {len(b3_future)} B3 future PASS"),
+            "7_skill_capability_invoke_on_future_tasks": verdict(
+                p7, f"{len(b1_future)} B1 + {len(b2_future)} B2 + {len(b3_future)} B3 future PASS"),
             "8_run_metrics_in_unified_run_record": verdict(p8, f"{len(records)} complete records + cost/NV"),
+            "9_treatment_attribution": verdict(p9, "all future runs carry machine-verified treatment"),
         }
+        attribution_gate = {
+            "schema_version": "treatment_attribution_gate_v1",
+            "gate": "PASS" if p9 else "FAIL",
+            "runs": attribution,
+            "blockers": [f"{rid}: {v['errors']}" for rid, v in attribution.items()
+                         if v["status"] == "INVALID_TREATMENT"],
+        }
+        (self.state / "treatment_attribution_gate.json").write_text(
+            json.dumps(attribution_gate, indent=2) + "\n")
         blockers = [f"{k}: {v['detail']}" for k, v in proofs.items() if v["status"] == "FAIL"]
         return {
             "schema_version": "fplus_rehearsal_gate_v1",
@@ -711,6 +835,7 @@ class Harness:
             "proofs": proofs,
             "outputs": {
                 "formation_runs": [r["run_id"] for r in sorted(formation, key=lambda r: r["order"])],
+                "b1_future_runs": [r["run_id"] for r in sorted(b1_future, key=lambda r: r["order"])],
                 "b2_future_runs": [r["run_id"] for r in sorted(b2_future, key=lambda r: r["order"])],
                 "b3_future_runs": [r["run_id"] for r in sorted(b3_future, key=lambda r: r["order"])],
                 "oracle_results": {r["run_id"]: r.get("oracle") for r in formation + future},
@@ -721,6 +846,7 @@ class Harness:
                 "skill_ref": str(self.state / "skill_ref.json"),
                 "candidate": str(self.state / "candidates" / "F+" / skill_ref.get("name", "")),
                 "registry_entry": str(self.registry_root / "F+" / f"{skill_ref.get('name', '')}.json"),
+                "treatment_attribution_gate": str(self.state / "treatment_attribution_gate.json"),
                 "run_records": str(self.records_path),
                 "cost_records": str(self.state / "cost.json"),
                 "nv_report": str(self.state / "nv_report.json"),
@@ -756,7 +882,8 @@ class temp_outdir:
 
 PHASES = {
     "oracle-check": "phase_oracle_check", "formation": "phase_formation",
-    "generation": "phase_generation", "b2-freeze": "phase_b2_freeze",
+    "generation": "phase_generation", "b1-freeze": "phase_b1_freeze",
+    "b2-freeze": "phase_b2_freeze",
     "b3-build": "phase_b3_build", "future": "phase_future",
     "cost": "phase_cost_report", "rehearsal": "rehearsal",
 }
@@ -765,7 +892,7 @@ PHASES = {
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", choices=list(PHASES), default="rehearsal")
-    ap.add_argument("--arm", choices=["b2", "b3"])
+    ap.add_argument("--arm", choices=["b0", "b1", "b2", "b3"])
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     h = Harness(force=args.force)

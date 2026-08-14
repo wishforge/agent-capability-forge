@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO / "src"))
 from forge.bundle_producer import (  # noqa: E402
     seal_bundle, validate_bundle, canonical_json, sha256_bytes, now_iso)
 from forge.capabilityizer import capabilityize, CapabilityizeError  # noqa: E402
+from pilot.run_record import validate_treatment  # noqa: E402
 
 
 def _minimal_bundle(store: Path) -> Path:
@@ -141,6 +142,58 @@ class TestCost(unittest.TestCase):
         self.assertEqual(out["nv"]["b2"]["nv"]["low"], 50)
         self.assertEqual(out["nv"]["b3"]["nv"]["low"], 50)
         self.assertEqual(out["sensitivity"][0]["verdict"], "not_superior")
+
+
+class TestTreatmentAttribution(unittest.TestCase):
+    @staticmethod
+    def _rec(arm: str, treatment: dict) -> dict:
+        return {"run_id": "run-x", "task_id": "fplus-future-1", "arm": arm,
+                "treatment": treatment}
+
+    @staticmethod
+    def _valid_b2() -> dict:
+        d = "sha256:" + "a" * 64
+        return {"type": "skill", "used": True, "ref": "csv-clean-statistical-report",
+                "digest": d, "evidence": {"kind": "skill_injection",
+                                          "mounted_digest": d, "expected_digest": d}}
+
+    @staticmethod
+    def _valid_b3() -> dict:
+        d = "sha256:" + "b" * 64
+        return {"type": "capability", "used": True, "ref": "cap-1", "digest": d,
+                "evidence": {"kind": "capability_invoke", "capability_id": "cap-1",
+                             "artifact_digest": d, "sandbox_id": "cbx-1"}}
+
+    def test_b2_missing_skill_evidence_invalid(self):
+        t = self._valid_b2()
+        t["evidence"] = None
+        self.assertTrue(validate_treatment(self._rec("b2", t)))
+
+    def test_b2_skill_used_false_invalid(self):
+        t = self._valid_b2()
+        t["used"] = False
+        self.assertTrue(validate_treatment(self._rec("b2", t)))
+
+    def test_b3_missing_capability_invoke_invalid(self):
+        t = self._valid_b3()
+        t["evidence"] = {}
+        self.assertTrue(validate_treatment(self._rec("b3", t)))
+
+    def test_b3_wrong_capability_digest_invalid(self):
+        t = self._valid_b3()
+        t["evidence"]["artifact_digest"] = "sha256:" + "c" * 64
+        self.assertTrue(validate_treatment(self._rec("b3", t)))
+
+    def test_b0_treatment_none_valid(self):
+        self.assertEqual(validate_treatment(
+            self._rec("b0", {"type": "none", "used": False,
+                             "ref": None, "digest": None, "evidence": None})), [])
+
+    def test_valid_b2_attribution(self):
+        self.assertEqual(validate_treatment(self._rec("b2", self._valid_b2())), [])
+
+    def test_valid_b3_attribution(self):
+        self.assertEqual(validate_treatment(self._rec("b3", self._valid_b3())), [])
 
 
 if __name__ == "__main__":

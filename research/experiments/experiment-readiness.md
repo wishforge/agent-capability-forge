@@ -1,6 +1,6 @@
 # Capability Forge vs Skill-only — 24-run Pilot Readiness Review
 
-- 状态：REVIEW ONLY（未运行实验、未修改实验设计、未写实现代码、未修改 `src`）
+- 状态：READINESS SNAPSHOT（已运行 F+ rehearsal；未启动正式 Pilot、未修改实验设计、未修改 `src`）
 - 日期：2026-08-14
 - 审查对象：`research/experiments/capability-forge-vs-skill.md`（v0.2 Final Correction）
 - 证据基线：
@@ -14,98 +14,104 @@
 
 # 1. Executive Summary
 
-**Pilot Readiness = NOT READY。**
+**Pilot Readiness = READY（Formal Pilot = NOT STARTED）。**
 
-当前仓库是“设计 + 考古 + 契约”仓库，不是可执行实验仓库：`src/` 为空，没有 experiment harness、没有 task fixtures、没有 oracle、没有 run record、没有成本采集、没有 sandbox 编排、没有模型/配置锁定。
+历史：本文件早前快照结论为 NOT READY，依据是“设计 + 考古 + 契约”仓库状态（无 harness / fixture /
+oracle / run record）。该结论已过时；相关 BLOCKED 项在下方标记为 resolved，不再删除历史事实。
+
+当前 `pilot/` 已含可执行 harness 与 state 产物（`src/` 仍未修改）：B0/B1/B2/B3 均 READY，
+Treatment Attribution Gate 与 F+ Rehearsal Gate 均 PASS。正式 24-run Pilot 尚未启动。
 
 已经具备的（READY）：
 
 - 实验设计冻结（`capability-forge-vs-skill.md` v0.2）。
 - VerifiedTaskArtifactBundle v0 契约冻结（P0 FROZEN）。
 - Runtime capture point 考古完成（Builder hook、EVENT_CAPTURE 通道、RUNTIME_CHANGE 清单）。
+- B0：READY（`phase_future --arm b0`，treatment=none，与 formation 共用执行/记录路径）。
+- B1：机制 READY、asset READY（human_minutes = 10）、freeze PASS、future rehearsal 2/2 PASS。
+- B2：READY；B3：READY（原 implementation blocker 已 resolved）。
+- Treatment Attribution Gate：PASS；F+ Rehearsal Gate：PASS（proofs 1-9 全部 PASS）。
 - 容器运行时可用：Docker daemon 29.1.3 在运行，本机存在 `python:3.12-slim`、`debian:bookworm-slim`、`busybox` 等可作 base image 的镜像。
 - Agent CLI 存在：`codex` 0.144.4（`codex exec` 可用）；yusing/codex（658630b）源码 clone 在 `<tmp>/yusing-codex`，但未构建出可运行 binary。
 
-核心缺口（BLOCKED）：
+仍待（NOT STARTED / 本次快照未声明变更）：
 
-- B3 最小 pipeline 不存在 → **implementation blocker**。
-- Pilot 任务族无具体任务实例、无 fixture、无确定性 oracle。
-- 无统一 run record、无成本 instrumentation、无 V / δ 预注册值。
-- 无 model/config 锁定；Ollama 服务未运行（localhost:11434 拒绝连接）。
-- 无 skill freeze/invoke 与 human-cost 记录机制。
+- **Formal Pilot = NOT STARTED**：未启动 24-run Pilot；按 Pilot Gate 流程单独放行。
+- §6-§10（Runtime / Oracle / Cost / Data Capture / Reproducibility）未在本次声明中更新，保留早前快照内容。
+- §11 中未标记 resolved 的 P1/P2 项（V/δ 预注册、sandbox isolation policy、secret-scan、randomization 等）按原样保留。
 
 ---
 
 # 2. B0 Readiness
 
-状态：**PARTIAL**
+状态：**READY**（此前 PARTIAL/BLOCKED → resolved，2026-08-14）
 
 | 检查项 | 状态 | 证据 / 缺口 |
 |---|---|---|
 | Agent CLI 可调用 | READY | `/opt/homebrew/bin/codex`（0.144.4），`codex exec` 存在 |
-| 可运行“Agent only”实验臂 | BLOCKED | 无 run harness、无任务 fixture、无模型端点验证 |
-| 模型可用 | BLOCKED | 仓库无模型配置；`ollama` 已安装但服务未运行（连接 refused）；未验证任何推理端点 |
-| 与 Pilot 任务接上 | BLOCKED | 无 2 个校准任务/族，无从谈 B0 success ∈ [0.2, 0.8] 校准 |
+| 可运行“Agent only”实验臂 | READY | resolved：`phase_future --arm b0` 已实现，treatment=none；与 formation 的 codex 路径共用同一执行/记录机制 |
+| 模型可用 | READY | resolved：F+ rehearsal 经 codex 实际执行 10 条 run 记录，oracle 全部 PASS |
+| 与 Pilot 任务接上 | READY | resolved：F+ 校准/未来任务实例与 oracle 已存在并跑通（golden t1/t2、fplus-future-1/2） |
 
-结论：有 agent 可执行文件，但没有“能跑 Pilot 的 B0 臂”。
+结论：B0 臂机制与 F+ 执行路径 READY；正式 Pilot 未启动。
 
 ---
 
 # 3. B1 Readiness
 
-状态：**BLOCKED**
+状态：**READY**（此前 BLOCKED → resolved，2026-08-14）
 
 | 检查项 | 状态 | 证据 / 缺口 |
 |---|---|---|
-| curated Skill 可创建 | PARTIAL | Codex 平台原生支持 SKILL.md/skill 目录，但仓库内无任何 skill 资产或创建流程 |
-| Skill freeze | BLOCKED | 无 freeze（不可变快照）机制 |
-| Skill invoke / 注入 | BLOCKED | 无“skill 目录发现/注入”harness |
-| human creation cost 可记录 | BLOCKED | 无 human minutes 记录器；无 B1 人时入口 |
-| 3 train → 1 skill 形成周期 | BLOCKED | 无 train task fixtures；且 Pilot 文本用 2 个校准 formation tasks，与 §6 冻结的 3-task formation unit 需要先裁决（见 §11 P1） |
+| curated Skill 可创建 | READY | resolved（此前 PARTIAL/BLOCKED）：`pilot/skills/curated/F+/csv-clean-statistical-report/SKILL.md` 与 `pilot/skills/frozen/B1/...` 已存在 |
+| Skill freeze | PASS | resolved（此前 BLOCKED）：`phase_b1_freeze` → `pilot/state/b1_skill_ref.json`，digest `sha256:63d2119423...f0f49`，frozen_at 2026-08-14T13:04:34Z |
+| Skill invoke / 注入 | READY | resolved（此前 BLOCKED）：`phase_future --arm b1` 走确定性注入 + attribution gate；B1 future rehearsal 2/2 VALID |
+| human creation cost 可记录 | READY | resolved（此前 BLOCKED）：`pilot/b1_curated_skill.json` 与 `b1_readiness.json` 记录 `human_minutes = 10` |
+| 3 train → 1 skill 形成周期 | READY | resolved（此前 BLOCKED）：F+ rehearsal 按 Pilot 设计跑 2 个校准 formation tasks（4 formation runs）→ 1 个 frozen skill；Main-study 的 3-task formation unit 保持设计冻结（仅裁决，未改设计） |
 
-结论：平台能力存在，实验机制为零。
+结论：**B1 asset blocker = RESOLVED**；机制与资产均 READY，human cost = 10 minutes。
 
 ---
 
 # 4. B2 Readiness
 
-状态：**BLOCKED**
+状态：**READY**（此前 BLOCKED → resolved，2026-08-14）
 
 | 检查项 | 状态 | 证据 / 缺口 |
 |---|---|---|
-| 固定 LLM input（Bundle/trajectory） | BLOCKED | 无 Artifact Builder，无 Bundle 产出；rollout JSONL 只在考古文档中分析过 |
-| LLM 生成 1 个 skill 文档 + 示例 | BLOCKED | 无生成器 / 固定 prompt 模板 |
-| skill freeze | BLOCKED | 同 B1 |
-| 与 B3 共享同一 generation input | BLOCKED | Pilot 目标 4 无法验证，因为输入不存在 |
+| 固定 LLM input（Bundle/trajectory） | READY | resolved（此前 BLOCKED）：`pilot/state/bundle_store/bundles/` 4 个 sealed bundles，digest equality 成立（proof 3） |
+| LLM 生成 1 个 skill 文档 + 示例 | READY | resolved（此前 BLOCKED）：`pilot/state/skill_ref.json` + `pilot/skills/frozen/F+/csv-clean-statistical-report/` 已生成 |
+| skill freeze | PASS | resolved（此前 BLOCKED）：同 B1，frozen skill digest `sha256:405faf4d...` |
+| 与 B3 共享同一 generation input | READY | resolved（此前 BLOCKED）：generation_input digest + 4 bundle refs 出现在全部 formation records（proof 3） |
 
-结论：B2 是 B3 的主对照之一，但目前只有设计文字。
+结论：B2 READY；F+ future 2/2 oracle PASS 且 treatment VALID。
 
 ---
 
 # 5. B3 Readiness
 
-状态：**BLOCKED — implementation blocker**
+状态：**READY**（此前 implementation blocker → resolved，2026-08-14）
 
 存在的最小闭环：
 
 ```text
-Bundle → Capabilityizer → deterministic validation → evaluation → promote/reject → invoke
+Bundle → Capabilityizer → deterministic validation → evaluation → promote → Registry → sandbox invoke
 ```
 
-**不存在。** 明确标记：**implementation blocker**。
+已由 F+ rehearsal 跑通（`fplus_rehearsal_gate.json` proofs 1-9 全部 PASS）。
 
 | 组件 | 状态 | 现状 |
 |---|---|---|
 | VerifiedTaskArtifactBundle 契约 | READY | P0 FROZEN（字段、禁止项、digest、validation rules 已冻结） |
-| Artifact Builder | BLOCKED | 未实现；runtime-capture 考古已定位 hook（`run_sampling_request` 尾部），但无代码 |
-| Capabilityizer | BLOCKED | 未实现 |
-| Validator（S0/S1） | BLOCKED | 未实现；依赖独立 sandbox |
-| Evaluator（golden + Novel Input + regression + independent reuse） | BLOCKED | 未实现 |
-| Promotion gate（0/1） | BLOCKED | 未实现 |
-| Registry + Discovery | BLOCKED | 未实现（无 SQLite、无 bundle store） |
-| Runtime invoke / revoke | BLOCKED | 未实现；Docker 可用但无沙箱策略/镜像锁定 |
+| Artifact Builder | READY | resolved：`bundle_store/bundles/` 4 个 sealed bundles（artifact snapshot + rollout + digest） |
+| Capabilityizer | READY | resolved：`pilot/state/llm_proposal.json` + `candidates/F+/csv-clean-statistical-report/manifest.json` 已产出 |
+| Validator（S0/S1） | READY | resolved：`candidates/.../validation.json` PASS（sandbox 内执行） |
+| Evaluator（golden + Novel Input + regression + independent reuse） | READY | resolved：`evaluation.json` PASS；novel input 结果见 `sandbox_out/evaluation/` |
+| Promotion gate（0/1） | READY | resolved：candidate 已 promote 至 `pilot/state/registry/F+/csv-clean-statistical-report.json` |
+| Registry + Discovery | READY | resolved：registry entry + artifact 已存在 |
+| Runtime invoke / revoke | READY（invoke）/ 未覆盖（revoke） | resolved：sandbox invoke exit_code=0（`cbx-...` sandbox_id）；revoke 未在 F+ rehearsal 覆盖（历史缺口保留） |
 
-注：P0 契约冻结与考古完成是设计层面的 READY，不等于可运行闭环。
+注：P0 契约与考古未变；契约冻结已推进到可运行闭环，P0 Bundle Contract 本身仍未修改。
 
 ---
 
@@ -207,19 +213,19 @@ Bundle → Capabilityizer → deterministic validation → evaluation → promot
 
 # 11. Blocking Dependencies
 
-## P0（没有这些，Pilot 一行都跑不了）
+## P0（早期快照：没有这些，Pilot 一行都跑不了；2026-08-14 已全部 RESOLVED）
 
-1. **Experiment harness / orchestrator**：24 runs 的启动、固定配置注入、顺序/随机记录、结果回收。
-2. **Pilot task fixtures + immutable manifest + deterministic oracles**：3 族 × 2 校准任务；每任务有输入、expected output、check 命令。
-3. **B3 最小 pipeline 实现（implementation blocker）**：Artifact Builder → Capabilityizer → Validator → Evaluator → promote/reject → Registry → sandbox invoke。B2 的固定 generation input 也依赖 Artifact Builder。
-4. **Run record + cost instrumentation**：统一 schema、存储、采集器。
+1. **Experiment harness / orchestrator**：24 runs 的启动、固定配置注入、顺序/随机记录、结果回收。→ **RESOLVED**：`pilot/harness.py` 已实现；`pilot/state/run_records.jsonl` 含 10 条完整记录（4 formation + 2 B1 + 2 B2 + 2 B3 future）。
+2. **Pilot task fixtures + immutable manifest + deterministic oracles**：3 族 × 2 校准任务；每任务有输入、expected output、check 命令。→ **RESOLVED（F+ 范围）**：golden t1/t2 + fplus-future-1/2 已实例化，oracle 全部 PASS 且 stable；F−/F0 未在本次声明范围。
+3. **B3 最小 pipeline 实现（implementation blocker）**：Artifact Builder → Capabilityizer → Validator → Evaluator → promote/reject → Registry → sandbox invoke。B2 的固定 generation input 也依赖 Artifact Builder。→ **RESOLVED**：F+ rehearsal proofs 1-9 全部 PASS。
+4. **Run record + cost instrumentation**：统一 schema、存储、采集器。→ **RESOLVED**：`run_records.jsonl`、`cost.json`、`cost_events.jsonl`、`nv_report.json` 已产出。
 
 ## P1（Pilot 质量/可比性依赖）
 
 5. **Model / config 锁定**：选择并验证同一推理端点与模型（Ollama 当前未运行），锁定 model config、timeout、output/tool limits。
-6. **B1 skill 机制**：curated skill 的创建、freeze、注入、invoke，以及 human minutes 记录。
+6. **B1 skill 机制**：curated skill 的创建、freeze、注入、invoke，以及 human minutes 记录。→ **RESOLVED**：机制 READY；asset READY（`pilot/b1_curated_skill.json`，human_minutes = 10）；freeze PASS；B1 future rehearsal 2/2 PASS；`pilot/state/b1_readiness.json` = READY。
 7. **Sandbox isolation policy**：Docker 上的网络关闭、只读 artifact、可写输出目录、资源限制，并锁定 base image。
-8. **Pilot formation episode 规模裁决**：Pilot 文本为“2 个校准 formation tasks/族”，§6 冻结 formation unit 为“3 train → 1 artifact”。运行前需明确 Pilot 的 B1/B2/B3 formation 用 2 还是 3 个任务（仅裁决，不改设计）。
+8. **Pilot formation episode 规模裁决**：Pilot 文本为“2 个校准 formation tasks/族”，§6 冻结 formation unit 为“3 train → 1 artifact”。运行前需明确 Pilot 的 B1/B2/B3 formation 用 2 还是 3 个任务（仅裁决，不改设计）。→ **RESOLVED（仅裁决，未改设计）**：Pilot 按设计用 2 个校准 tasks/族；F+ rehearsal 已按此跑通（4 formation runs → 1 frozen skill/candidate）；Main-study 的 3 train → 1 artifact 保持冻结。
 9. **预注册 V_low / V_mid / V_high 与 δ_NV 档位值**：Pilot 目标 8 要求验证 sensitivity 可运行，但当前无值。
 
 ## P2（防线完整性）
@@ -233,6 +239,8 @@ Bundle → Capabilityizer → deterministic validation → evaluation → promot
 
 按 P0 顺序的最小集合（不包含主实验功能）：
 
+（以下为早前快照的“实施前”计划，保留作历史；1-6 在 F+ 范围内已实现并经 rehearsal 验证，7 未在本次声明中标记为 resolved。）
+
 | # | 最小件 | 覆盖 blocker |
 |---|---|---|
 | 1 | Run orchestrator（4 arm × 每 run fresh 环境） | P0-1 |
@@ -245,10 +253,88 @@ Bundle → Capabilityizer → deterministic validation → evaluation → promot
 
 ---
 
-**Pilot Readiness = NOT READY**
+**Pilot Readiness = READY（Formal Pilot = NOT STARTED）**
 
-P0 阻塞项：experiment harness、task fixtures/oracles/manifest、B3（含 Builder）最小 pipeline、run record + cost instrumentation。
+历史：早前快照为 NOT READY；对应 BLOCKED 项已标记 resolved，事实保留。
 
-P1 阻塞项：model/config 锁定、B1 skill 机制与 human-cost、sandbox isolation policy、Pilot formation 规模裁决、V/δ 预注册值。
+P0 阻塞项：全部 RESOLVED（F+ rehearsal 验证）。
+
+P1 阻塞项：B1 skill 机制与 human-cost 已 RESOLVED（human_minutes = 10）；Pilot formation 规模已裁决（2 个校准 tasks）；model/config 锁定、sandbox isolation policy、V/δ 预注册值按原快照保留。
 
 P2 阻塞项：secret-scan gate、randomization/repeated-runs 工具。
+
+---
+
+# 13. Treatment Attribution Hardening（2026-08-14 更新）
+
+状态：本更新解决“B2 oracle=PASS 但 skill_used=false”导致的 treatment attribution 缺口。
+只修改 `pilot/`、`tests/` 与本文档；未修改 `docs/`、`src/forge/*`、P0 Bundle Contract、
+Runtime Boundary Architecture Decision、`research/artifact-contract/*`。未运行 24/84 主实验。
+
+## 13.1 run_record_v1：treatment 字段
+
+每条 run record 新增 `treatment` 对象：
+
+```json
+{
+  "type": "skill | capability | none",
+  "used": true | false,
+  "ref": "<skill name | capability_id>",
+  "digest": "sha256:<digest>",
+  "evidence": {"kind": "skill_injection | capability_invoke", "...": "..."}
+}
+```
+
+- B0：`type=none, used=false`
+- B1/B2：`type=skill`；used 由 harness 注入记录决定，不再依赖 agent 最后一条消息文本
+- B3：`type=capability`；used=true 且必须携带 capability_id / digest / invoke evidence
+
+## 13.2 机器可验证证据
+
+- B2：harness 把 frozen skill 复制进 run 的 `CODEX_HOME/skills/<name>`，记录 mounted path、
+  mounted digest、frozen digest 与 digest_match。证据为 harness-level injection record，确定性，
+  不解析 Codex rollout。
+- B3：记录 registry capability_id、artifact_dir、artifact digest、Docker sandbox_id、
+  invoke command 与 invoke result（exit_code/stdout/stderr）。
+
+## 13.3 Treatment Attribution Gate
+
+- B1/B2：`used==true` AND `ref` 非空 AND `digest` 非空 AND skill injection evidence 存在且
+  mounted digest == frozen digest == treatment.digest；否则 `INVALID_TREATMENT`。
+- B3：`used==true` AND `capability_id` 非空 AND digest/version 非空 AND invoke evidence 存在
+  （sandbox_id + capability_id 一致 + artifact digest 一致）；否则 `INVALID_TREATMENT`。
+- 输出：`pilot/state/treatment_attribution_gate.json`；并作为 rehearsal gate proof 9。
+
+## 13.4 Tests
+
+`tests/test_minimal.py::TestTreatmentAttribution` 覆盖：
+B2 缺 skill evidence、B2 skill_used=false、B3 缺 capability invoke、B3 wrong capability digest、
+B0 treatment=none、valid B2、valid B3。当前 11 个 unit tests 全部通过。
+
+## 13.5 B0/B1/B2/B3 Readiness（本轮实现后的状态）
+
+- B0：READY。`phase_future --arm b0` 为 agent-only future task，treatment=none；与 formation
+  的 codex 路径共用同一执行/记录机制。
+- B1：机制 READY，资产 **RESOLVED（此前 BLOCKED → operator asset 已提供）**。`phase_b1_freeze`
+  已实现 frozen curated skill → digest → `b1_skill_ref.json`；`phase_future --arm b1` 走与 B2
+  相同的确定性注入 + attribution gate。`pilot/b1_curated_skill.json`（`name`、`family=F+`、
+  `human_minutes=10`、`human_confirmed=true`）与 `pilot/skills/curated/F+/csv-clean-statistical-report/SKILL.md`
+  已存在；`pilot/state/b1_readiness.json` = READY；B1 future rehearsal 2/2 PASS（treatment VALID）。
+- B2：READY（此前 BLOCKED → resolved）。frozen skill + injection evidence + treatment VALID，F+ future 2/2 PASS。
+- B3：READY（此前 implementation blocker → resolved）。formation → candidate → validation → evaluation →
+  promotion → registry → sandbox invoke 闭环跑通，F+ future 2/2 PASS。
+
+## 13.6 F+ Rehearsal 重跑结果
+
+全新 `pilot/state`（旧 state 备份为 `pilot/state.pre-attribution-20260814`，未提交 Git）重跑：
+
+- 4 formation runs：oracle 全部 PASS、stable
+- B1 future runs（fplus-future-1/2）：oracle PASS，skill_used=true，treatment VALID
+- B2 future runs（fplus-future-1/2）：oracle PASS，skill_used=true，treatment VALID
+- B3 future runs（fplus-future-1/2）：oracle PASS，capability_used=capability_id，
+  invoke result exit_code=0，treatment VALID
+- `fplus_rehearsal_gate.json`：PASS，proofs 1-9 全部 PASS
+- `treatment_attribution_gate.json`：PASS，blockers=[]
+
+**Formal Pilot = NOT STARTED**。此前的“正式 Pilot 前需完成 B1 curated skill 输入”要求已满足
+（B1 asset blocker = RESOLVED）；正式 Pilot 仍须按 Pilot Gate 流程单独放行，本次未启动。

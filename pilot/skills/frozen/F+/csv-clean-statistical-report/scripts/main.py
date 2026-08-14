@@ -1,112 +1,112 @@
 #!/usr/bin/env python3
-"""Clean a CSV of transaction records and write a statistical report.
+"""Clean an order/sales CSV and write a statistical report."""
 
-Usage:
-    python main.py <input.csv> <output_directory>
-"""
 import csv
+import os
 import sys
 from datetime import datetime
-from pathlib import Path
 
-REQUIRED_COLUMNS = ('id', 'customer', 'date', 'category', 'amount')
-DATE_FORMATS = ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%Y%m%d')
-NEWLINE = chr(10)
+COLUMNS = ['id', 'customer', 'date', 'category', 'amount']
+
+DATE_FORMATS = (
+    '%Y-%m-%d',
+    '%Y/%m/%d',
+    '%Y.%m.%d',
+    '%m/%d/%Y',
+    '%m-%d-%Y',
+    '%d/%m/%Y',
+    '%d-%m-%Y',
+    '%d.%m.%Y',
+    '%b %d, %Y',
+    '%B %d, %Y',
+    '%d %b %Y',
+    '%d %B %Y',
+)
 
 
-def normalize_date(raw):
-    value = (raw or '').strip()
-    if not value:
-        return None
+def parse_date(value):
+    text = value.strip()
     for fmt in DATE_FORMATS:
         try:
-            return datetime.strptime(value, fmt).date().isoformat()
+            return datetime.strptime(text, fmt).strftime('%Y-%m-%d')
         except ValueError:
             pass
-    try:
-        return datetime.fromisoformat(value.replace('Z', '+00:00')).date().isoformat()
-    except ValueError:
-        return None
+    return None
 
 
-def parse_amount(raw):
-    value = (raw or '').strip()
-    if value == '':
-        return 0.0
+def parse_amount(value):
+    text = value.strip().replace(',', '')
     try:
-        return float(value)
+        return float(text)
     except ValueError:
         return 0.0
 
 
-def id_sort_key(raw):
-    value = raw.strip()
+def id_key(value):
     try:
-        return (0, int(value))
+        return (0, int(value), '')
     except ValueError:
-        return (1, value)
+        return (1, 0, value)
+
+
+def cell(row, index):
+    return row[index].strip() if index is not None and index < len(row) else ''
 
 
 def main():
     if len(sys.argv) != 3:
-        print('usage: python main.py <input.csv> <output_directory>', file=sys.stderr)
+        print('usage: python main.py <input.csv> <outdir>', file=sys.stderr)
         return 2
-    input_path = Path(sys.argv[1])
-    output_dir = Path(sys.argv[2])
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    with input_path.open(newline='', encoding='utf-8-sig') as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            print('error: input CSV has no header row', file=sys.stderr)
-            return 2
-        missing = [col for col in REQUIRED_COLUMNS if col not in reader.fieldnames]
-        if missing:
-            print('error: missing required columns: ' + ', '.join(missing), file=sys.stderr)
-            return 2
-        records = list(reader)
+    input_path, outdir = sys.argv[1], sys.argv[2]
 
-    seen = set()
-    cleaned = []
-    for record in records:
-        key = tuple(record.get(col, '') for col in reader.fieldnames)
-        if key in seen:
-            continue
-        seen.add(key)
+    with open(input_path, newline='', encoding='utf-8-sig') as handle:
+        rows = list(csv.reader(handle))
 
-        if any(not (record.get(col) or '').strip() for col in ('id', 'customer', 'category')):
-            continue
+    if not rows:
+        records = []
+    else:
+        header = [name.strip().lower() for name in rows[0]]
+        if any(name in header for name in COLUMNS):
+            data = rows[1:]
+        else:
+            header = COLUMNS
+            data = rows
+        index = {name: header.index(name) for name in COLUMNS if name in header}
 
-        normalized_date = normalize_date(record.get('date'))
-        if normalized_date is None:
-            continue
+        seen = set()
+        records = []
+        for row in data:
+            key = tuple(row)
+            if key in seen:
+                continue
+            seen.add(key)
 
-        cleaned.append({
-            'id': record['id'].strip(),
-            'customer': record['customer'].strip(),
-            'date': normalized_date,
-            'category': record['category'].strip(),
-            'amount': parse_amount(record.get('amount')),
-        })
+            record = {name: cell(row, index.get(name)) for name in COLUMNS}
+            if not record['id'] or not record['customer'] or not record['category']:
+                continue
+            record['date'] = parse_date(record['date'])
+            if record['date'] is None:
+                continue
+            record['amount'] = parse_amount(record['amount'])
+            records.append(record)
 
-    cleaned.sort(key=lambda row: id_sort_key(row['id']))
-
-    total_rows = len(cleaned)
-    total_amount = sum(row['amount'] for row in cleaned)
-    unique_customers = len({row['customer'] for row in cleaned})
+    records.sort(key=lambda r: id_key(r['id']))
+    total_rows = len(records)
+    total_amount = sum(r['amount'] for r in records)
+    unique_customers = len({r['customer'] for r in records})
     mean_amount = total_amount / total_rows if total_rows else 0.0
 
-    report = NEWLINE.join([
-        'total_rows: {}'.format(total_rows),
-        'total_amount: {:.2f}'.format(total_amount),
-        'unique_customers: {}'.format(unique_customers),
-        'mean_amount: {:.2f}'.format(mean_amount),
-    ]) + NEWLINE
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, 'report.md'), 'w', encoding='utf-8') as report:
+        report.write(f'total_rows: {total_rows}\n')
+        report.write(f'total_amount: {total_amount:.2f}\n')
+        report.write(f'unique_customers: {unique_customers}\n')
+        report.write(f'mean_amount: {mean_amount:.2f}\n')
 
-    (output_dir / 'report.md').write_text(report, encoding='utf-8')
-    print(report, end='')
+    print(f'report.md written with {total_rows} rows')
     return 0
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    sys.exit(main())

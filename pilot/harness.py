@@ -33,7 +33,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "src"))
 
 from forge.sandbox import launch as docker_launch  # noqa: E402
-from forge.capabilityizer import capabilityize, CapabilityizeError  # noqa: E402
+from forge.capabilityizer import capabilityize, CapabilityizeError, static_scan  # noqa: E402
 from forge.validator import validate as validate_candidate  # noqa: E402
 from forge.evaluator import evaluate as evaluate_candidate  # noqa: E402
 import pilot.cost as cost_mod  # noqa: E402
@@ -434,26 +434,42 @@ class Harness:
         home = self._make_codex_home(self.state / "generation")
         (ws / "generation_input.json").write_bytes(gen_bytes)
         (ws / "proposal_schema.json").write_text(json.dumps(gen_mod.PROPOSAL_SCHEMA, indent=2))
-        exit_code = gen_mod.run(home, ws, ws / "proposal_schema.json", self.cfg["model"],
-                                self.cfg["limits"]["timeout_seconds"],
-                                self.state / "generation" / "last.txt",
-                                self.state / "generation" / "exec.log")
-        rollout = self._find_rollout(home)
-        if rollout:
-            shutil.copyfile(rollout, self.state / "generation" / "rollout.jsonl")
-        if exit_code != 0:
-            raise RuntimeError(f"LLM proposal generation failed (codex exit {exit_code})")
-        proposal_path = ws / "llm_proposal.json"
-        if not proposal_path.exists():
-            last = (self.state / "generation" / "last.txt").read_text().strip()
-            proposal = json.loads(last)
-            (self.state / "llm_proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
-        else:
-            shutil.copyfile(proposal_path, self.state / "llm_proposal.json")
-        proposal = json.loads((self.state / "llm_proposal.json").read_text())
-        errors = gen_mod.validate_proposal(proposal)
-        if errors:
-            raise RuntimeError("invalid llm_proposal: " + "; ".join(errors))
+        prompt = gen_mod.PROMPT
+        attempts = 0  # ponytail: fixed 2 retries; track retry cost when LLM spend matters
+        while True:
+            exit_code = gen_mod.run(home, ws, ws / "proposal_schema.json", self.cfg["model"],
+                                    self.cfg["limits"]["timeout_seconds"],
+                                    self.state / "generation" / "last.txt",
+                                    self.state / "generation" / "exec.log", prompt=prompt)
+            rollout = self._find_rollout(home)
+            if rollout:
+                shutil.copyfile(rollout, self.state / "generation" / "rollout.jsonl")
+            if exit_code != 0:
+                raise RuntimeError(f"LLM proposal generation failed (codex exit {exit_code})")
+            proposal_path = ws / "llm_proposal.json"
+            if not proposal_path.exists():
+                last = (self.state / "generation" / "last.txt").read_text().strip()
+                proposal = json.loads(last)
+                (self.state / "llm_proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
+            else:
+                shutil.copyfile(proposal_path, self.state / "llm_proposal.json")
+            proposal = json.loads((self.state / "llm_proposal.json").read_text())
+            errors = gen_mod.validate_proposal(proposal)
+            if errors:
+                raise RuntimeError("invalid llm_proposal: " + "; ".join(errors))
+            hits = static_scan(
+                "\n".join(list(proposal["implementation"].values()) + [proposal["skill_md"]]),
+                [b.get("cwd") for b in bundles if b.get("cwd")])
+            if not hits:
+                break
+            if attempts >= 2:
+                raise RuntimeError("LLM proposal rejected by capabilityizer after retries: "
+                                   + ", ".join(hits))
+            attempts += 1
+            prompt = gen_mod.PROMPT + (
+                "\n\nYour previous proposal was REJECTED because it references task-private state: "
+                + ", ".join(hits) + ". Rewrite llm_proposal.json without any of these strings; "
+                + "use generic placeholders like <input.csv> and <outdir> in examples.")
         proposal_digest = _file_sha256(self.state / "llm_proposal.json")
         (self.state / "llm_proposal.sha256").write_text(proposal_digest)
         metrics = None
@@ -477,7 +493,7 @@ class Harness:
                                  generation_input_digest=gen_digest,
                                  proposal_digest=proposal_digest, bundle_ids=bundle_ids)
         meta = {"generation_input_digest": gen_digest, "proposal_digest": proposal_digest,
-                "bundle_ids": bundle_ids, "llm_calls": 1, "runtime_metrics": metrics}
+                "bundle_ids": bundle_ids, "llm_calls": attempts + 1, "runtime_metrics": metrics}
         (self.state / "generation_meta.json").write_text(json.dumps(meta, indent=2) + "\n")
         return meta
 

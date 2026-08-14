@@ -1,37 +1,25 @@
 ---
 name: csv-clean-statistical-report
-description: Cleans a CSV of transaction records (deduplicate rows, drop rows missing id/customer/category or an unparseable date, fill missing amounts with 0, sort by id) and writes a statistical report.md.
+description: Clean an order/sales CSV (dedupe, drop incomplete rows, fill missing amounts, normalize dates, sort by id) and generate a Markdown statistical report. Use when a task asks for CSV cleaning plus total rows, total amount, unique customers, and mean amount.
 ---
 
 # CSV Clean + Statistical Report
 
-Use this skill when a task asks you to read a CSV with columns `id`, `customer`, `date`, `category`, and `amount`, clean it, and write a `report.md` containing `total_rows`, `total_amount`, `unique_customers`, and `mean_amount`.
+Use `scripts/main.py` to do the whole job:
 
-## Cleaning rules
-
-The script in `scripts/main.py` applies these rules in order:
-
-1. Remove exact duplicate rows (identical values in every column), keeping the first occurrence.
-2. Drop rows where `id`, `customer`, or `category` is empty or whitespace-only.
-3. Fill missing or non-numeric `amount` values with `0`.
-4. Normalize `date` values to `YYYY-MM-DD`; drop rows whose date cannot be parsed.
-5. Sort rows by `id` ascending (numeric when possible).
-
-## Usage
-
-Run the script with the input CSV path and the output directory:
-
-```bash
-python scripts/main.py path/to/input.csv path/to/output
+```
+python scripts/main.py <input.csv> <outdir>
 ```
 
-The script writes `report.md` into the output directory with exactly these four lines (floats formatted with 2 decimals):
+The script removes exact duplicate rows, drops rows missing id/customer/category, fills missing amount values with 0, normalizes dates to YYYY-MM-DD (dropping unparseable dates), sorts by id ascending, and writes `report.md` into the output directory.
 
-```text
-total_rows: 9
-total_amount: 83.00
-unique_customers: 8
-mean_amount: 9.22
+`report.md` contains exactly these four lines, with floats formatted to 2 decimals:
+
+```
+total_rows: <int>
+total_amount: <number>
+unique_customers: <int>
+mean_amount: <number>
 ```
 
-It also prints the report to stdout. Verify `report.md` exists and contains exactly those four lines before finishing.
+Run the script, then verify `report.md` matches the required format before finishing.

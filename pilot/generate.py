@@ -45,21 +45,23 @@ Read generation_input.json in this workspace. It contains 4 verified task bundle
 Write llm_proposal.json in this workspace with EXACTLY this shape (all fields required):
 - name: kebab-case capability name
 - description: one sentence
-- skill_md: complete SKILL.md text for a Codex skill (frontmatter with name and description, instructions, and a usage example that references scripts/main.py)
+- skill_md: complete SKILL.md text for a Codex skill (frontmatter with name and description, instructions, and a usage example that references scripts/main.py with generic placeholders like <input.csv> and <outdir>)
 - implementation: {"main.py": "<complete python3 stdlib-only script>"}. The script MUST take the input CSV path as sys.argv[1] and the output directory as sys.argv[2]. It cleans per the rules in generation_input.json (remove exact duplicate rows; drop rows missing id/customer/category; fill missing amount with 0; normalize dates to YYYY-MM-DD and drop unparseable dates; sort by id) and writes report.md into the output directory with exactly these lines (floats with 2 decimals): total_rows, total_amount, unique_customers, mean_amount. It MUST NOT hardcode any absolute path, any original workspace path, or any fixture filename like data/input.csv.
 - entrypoint: {"command": ["python", "main.py"], "workdir": "artifact"}
 - contract: {"input": {"files": ["data/*.csv"], "args": {"freeform": ""}}, "output": {"files": ["report.md"], "stdout": "string", "exit_code": 0}}
 - tests: list of golden test case ids
+The proposal MUST NOT contain "data/input.csv", "data/cleaned.csv", any "/Users/" path, "sessions/", "rollout-", or any original workspace path — the capabilityizer rejects these as task-private state.
 Write the file. Do not write any other files."""
 
 
 def run(codex_home: Path, workdir: Path, schema_path: Path, model: dict,
-        timeout_s: int, last_msg_path: Path, stdout_log: Path) -> int:
+        timeout_s: int, last_msg_path: Path, stdout_log: Path,
+        prompt: str = PROMPT) -> int:
     cmd = ["codex", "exec", "--skip-git-repo-check", "-s", "workspace-write",
            "-c", f"model_provider={model['provider']}",
            "-c", f"model={model['name']}",
            "-c", f"model_reasoning_effort={model['reasoning_effort']}",
-           "--output-schema", str(schema_path), "-o", str(last_msg_path), PROMPT]
+           "--output-schema", str(schema_path), "-o", str(last_msg_path), prompt]
     env = {"CODEX_HOME": str(codex_home), "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}
     with stdout_log.open("w") as fh:
         proc = subprocess.run(cmd, cwd=workdir, env=env, timeout=timeout_s,

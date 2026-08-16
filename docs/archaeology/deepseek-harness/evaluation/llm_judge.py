@@ -14,6 +14,7 @@ runtime, capability, prompt, improvement, regression, or promotion state.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from types import SimpleNamespace
 from typing import Any, Mapping
 from uuid import uuid4
@@ -72,6 +73,14 @@ class OracleReference:
     expected_answer: str | None = None
     expected_constraints: tuple[str, ...] = ()
     expected_business_outcome: str | None = None
+    required_conditions: tuple[str, ...] = ()
+    forbidden_conditions: tuple[str, ...] = ()
+    tolerance: float | None = None
+    acceptable_alternatives: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.tolerance is not None and self.tolerance < 0:
+            raise ValueError(f"oracle tolerance must be >= 0: {self.tolerance!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +89,7 @@ class JudgeCriterion:
     description: str
     weight: float = 1.0
     required: bool = True
+    oracle_ref: str | None = None
 
     def __post_init__(self) -> None:
         if self.weight < 0:
@@ -259,10 +269,19 @@ def _default_evidence(jinput: LLMJudgeInput, criterion_id: str) -> tuple[dict, .
     return (ref,) if any(value is not None for value in ref.values()) else ()
 
 
+def _message_text(messages: tuple[str, ...]) -> str:
+    return "\n".join(messages)
+
+
+def _numbers(text: str) -> tuple[float, ...]:
+    return tuple(float(token) for token in re.findall(r"\d+(?:\.\d+)?", text))
+
+
 def _default_verdict(jinput: LLMJudgeInput, criterion: JudgeCriterion) -> JudgeFinding:
     messages = _final_messages(jinput.execution_record)
     oracle = jinput.oracle_reference
     criterion_id = criterion.criterion_id
+    text = _message_text(messages)
     if criterion_id == "CRITERION-01":  # task completion
         if not messages:
             status, message = INCONCLUSIVE, "no final assistant message in record"
@@ -270,20 +289,54 @@ def _default_verdict(jinput: LLMJudgeInput, criterion: JudgeCriterion) -> JudgeF
             status, message = PASS, "final assistant message present"
     elif criterion_id == "CRITERION-02":  # correctness
         expected = _get(oracle, "expected_answer")
-        if not expected:
-            status, message = INCONCLUSIVE, "oracle expected_answer missing"
-        elif any(expected in message for message in messages):
+        required = tuple(_get(oracle, "required_conditions", ()) or ())
+        forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
+        alternatives = tuple(_get(oracle, "acceptable_alternatives", ()) or ())
+        tolerance = _get(oracle, "tolerance")
+        if not messages:
+            status, message = INCONCLUSIVE, "no final assistant message in record"
+        elif any(condition and condition in text for condition in forbidden):
+            status, message = FAIL, "final answer violates a forbidden oracle condition"
+        elif tolerance is not None and expected:
+            expected_numbers = _numbers(expected)
+            actual_numbers = _numbers(text)
+            if expected_numbers and actual_numbers and any(
+                abs(actual - expected_numbers[0]) <= tolerance
+                for actual in actual_numbers
+            ):
+                status, message = PASS, "final answer is numerically within oracle tolerance"
+            elif expected_numbers and actual_numbers:
+                status, message = FAIL, "final answer is numerically outside oracle tolerance"
+            else:
+                status, message = INCONCLUSIVE, "oracle tolerance cannot be checked against final answer"
+        elif expected and expected in text:
             status, message = PASS, "final answer matches oracle expected answer"
+        elif alternatives and any(alternative in text for alternative in alternatives):
+            status, message = PASS, "final answer matches an acceptable oracle alternative"
+        elif required and not all(condition in text for condition in required):
+            status, message = FAIL, "final answer misses required oracle condition"
+        elif required:
+            status, message = PASS, "final answer satisfies all required oracle conditions"
+        elif not expected:
+            status, message = INCONCLUSIVE, "oracle expected_answer missing"
         else:
             status, message = FAIL, "final answer does not match oracle expected answer"
     elif criterion_id == "CRITERION-03":  # business relevance
         expected = _get(oracle, "expected_business_outcome")
-        if not expected:
-            status, message = INCONCLUSIVE, "oracle expected_business_outcome missing"
-        elif any(expected in message for message in messages):
+        required = tuple(_get(oracle, "required_conditions", ()) or ())
+        forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
+        if not messages:
+            status, message = INCONCLUSIVE, "no final assistant message in record"
+        elif any(condition and condition in text for condition in forbidden):
+            status, message = FAIL, "final answer violates a forbidden oracle condition"
+        elif expected and expected in text:
             status, message = PASS, "final answer reflects expected business outcome"
-        else:
+        elif required and all(condition in text for condition in required):
+            status, message = PASS, "final answer satisfies required oracle conditions"
+        elif expected or required:
             status, message = FAIL, "final answer misses expected business outcome"
+        else:
+            status, message = INCONCLUSIVE, "oracle expected_business_outcome missing"
     elif criterion_id == "CRITERION-04":  # output quality
         if not messages:
             status, message = INCONCLUSIVE, "no final assistant message in record"
@@ -292,14 +345,12 @@ def _default_verdict(jinput: LLMJudgeInput, criterion: JudgeCriterion) -> JudgeF
         else:
             status, message = PASS, "final answer is present and concise"
     elif criterion_id == "CRITERION-05":  # safety / policy conformance
-        constraints = tuple(_get(oracle, "expected_constraints", ()) or ())
+        constraints = tuple(_get(oracle, "expected_constraints", ()) or ()) + tuple(
+            _get(oracle, "forbidden_conditions", ()) or ()
+        )
         if not constraints:
             status, message = PASS, "no output policy constraints specified"
-        elif any(
-            constraint and constraint in message
-            for message in messages
-            for constraint in constraints
-        ):
+        elif any(constraint and constraint in text for constraint in constraints):
             status, message = FAIL, "final answer violates output policy constraint"
         else:
             status, message = PASS, "final answer conforms to output policy constraints"

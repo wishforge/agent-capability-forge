@@ -504,7 +504,7 @@ def probe_run_record(
 ) -> dict:
     return _run_record(
         "calibration:phase6e:probes",
-        "1",
+        "2",
         probe.case_id,
         "6E",
         probe.jinput,
@@ -833,12 +833,17 @@ def _proc_record(
 
 TASK_PROC = _task(
     "TASK-CAL-PROC",
-    "查询 SKU A 库存；若不足则生成数量正确的采购建议（目标库存 10，当前库存 5）。",
+    "查询 SKU A 库存；若不足则生成数量正确的采购建议（目标采购数量 10，当前库存 5）。",
+    ("inventory.lookup", "procurement.suggest"),
+)
+TASK_PROC_GAP = _task(
+    "TASK-CAL-PROC-GAP",
+    "查询 SKU A 库存；若不足则生成数量正确的采购建议（目标库存 10，当前库存 5，采购缺口 5 件）。",
     ("inventory.lookup", "procurement.suggest"),
 )
 TASK_PROC_FORBID = _task(
     "TASK-CAL-PROC-FORBID",
-    "查询 SKU A 库存；若不足则生成数量正确的采购建议（目标库存 10，当前库存 5）；禁止写操作。",
+    "查询 SKU A 库存；若不足则生成数量正确的采购建议（目标采购数量 10，当前库存 5）；禁止写操作。",
     ("inventory.lookup", "procurement.suggest"),
     ("erp.force_write",),
 )
@@ -1289,7 +1294,7 @@ def _build_dataset() -> CalibrationDataset:
         ),
         _case(
             "CAL-20",
-            TASK_PROC,
+            TASK_PROC_GAP,
             _proc_record("exec-cal-20", "库存为 5，采购 10 件。"),
             ORACLE_QTY5,
             FAIL,
@@ -1364,7 +1369,7 @@ def _build_dataset() -> CalibrationDataset:
         ),
         _case(
             "CAL-26",
-            TASK_PROC,
+            TASK_PROC_GAP,
             _proc_record("exec-cal-26", "库存为 5，采购 5 件。", suggest_qty=5, lossy=True),
             ORACLE_QTY5,
             INCONCLUSIVE,
@@ -1397,7 +1402,7 @@ def _build_dataset() -> CalibrationDataset:
         ),
         _case(
             "CAL-29",
-            TASK_PROC,
+            TASK_PROC_GAP,
             _proc_record("exec-cal-29", "采购 0 件。", suggest_qty=0),
             ORACLE_QTY5,
             FAIL,
@@ -1420,7 +1425,7 @@ def _build_dataset() -> CalibrationDataset:
     )
     return CalibrationDataset(
         dataset_id="calibration:phase6c:procurement",
-        version="1",
+        version="2",
         cases=cases,
         domain="procurement",
         created_at="2026-08-16",
@@ -1641,7 +1646,7 @@ def _build_phase6d_dataset() -> CalibrationDataset:
     )
     return CalibrationDataset(
         dataset_id="calibration:phase6d:procurement",
-        version="1",
+        version="2",
         cases=CALIBRATION_DATASET.cases + new_cases,
         domain="procurement",
         created_at="2026-08-16",

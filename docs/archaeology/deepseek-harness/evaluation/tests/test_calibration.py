@@ -109,7 +109,7 @@ def _outcome(
 class CalibrationDatasetTests(unittest.TestCase):
     def test_dataset_version(self) -> None:
         ds = CALIBRATION_DATASET
-        self.assertEqual(ds.version, "1")
+        self.assertEqual(ds.version, "2")
         self.assertEqual(ds.dataset_id, "calibration:phase6c:procurement")
         self.assertTrue(ds.created_at)
         self.assertGreaterEqual(len(ds.cases), 30)
@@ -353,8 +353,44 @@ class CalibrationDatasetTests(unittest.TestCase):
             ):
                 self.assertIn(field, record)
             self.assertNotIn("secret", record)
-            self.assertEqual(record["dataset_version"], "1")
+            self.assertEqual(record["dataset_version"], "2")
             self.assertEqual(record["result"], PASS)
+
+
+class FixtureWordingTests(unittest.TestCase):
+    """Phase 6-E.1-A2: qty=10 / qty=5 task texts are split per family."""
+
+    def test_qty10_family_uses_purchase_quantity_wording(self) -> None:
+        goal = CALIBRATION_DATASET.case("TASK-JUDGE-01").task_specification.natural_language_goal
+        self.assertIn("目标采购数量 10，当前库存 5", goal)
+        self.assertNotIn("目标库存 10，当前库存 5", goal)
+
+    def test_qty5_family_explicit_gap_wording(self) -> None:
+        for case_id in ("CAL-20", "CAL-26", "CAL-29"):
+            goal = CALIBRATION_DATASET.case(case_id).task_specification.natural_language_goal
+            self.assertIn("目标库存 10，当前库存 5，采购缺口 5 件", goal)
+
+    def test_labels_oracles_and_deterministic_status_unchanged(self) -> None:
+        expectations = (
+            ("TASK-JUDGE-01", PASS, "oracle:phase6c:procurement:qty10", PASS),
+            ("CAL-20", FAIL, "oracle:phase6c:numeric:qty5", FAIL),
+            ("CAL-26", INCONCLUSIVE, "oracle:phase6c:numeric:qty5", INCONCLUSIVE),
+            ("CAL-29", FAIL, "oracle:phase6c:numeric:qty5", FAIL),
+        )
+        for case_id, expected_status, oracle_id, offline_status in expectations:
+            case = CALIBRATION_DATASET.case(case_id)
+            self.assertEqual(case.expected_status, expected_status, case_id)
+            self.assertEqual(case.oracle_reference.oracle_id, oracle_id, case_id)
+            self.assertEqual(
+                evaluate(case.execution_record, case.task_specification).status,
+                PASS,
+                case_id,
+            )
+            self.assertEqual(
+                fake_judge(case.jinput()).status,
+                offline_status,
+                case_id,
+            )
 
     def test_append_calibration_run(self) -> None:
         with tempfile.TemporaryDirectory(prefix="phase6c-") as td:

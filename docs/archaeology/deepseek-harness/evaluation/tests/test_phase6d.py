@@ -367,7 +367,7 @@ class Phase6DDatasetTests(unittest.TestCase):
     def test_dataset_contains_legacy_and_6d_cases(self) -> None:
         ds = PHASE6D_DATASET
         self.assertEqual(ds.dataset_id, "calibration:phase6d:procurement")
-        self.assertEqual(ds.version, "1")
+        self.assertEqual(ds.version, "2")
         self.assertGreaterEqual(len(ds.cases), 44)
         self.assertEqual(len({case.case_id for case in ds.cases}), len(ds.cases))
         legacy = [case for case in ds.cases if case.generation == "6C"]

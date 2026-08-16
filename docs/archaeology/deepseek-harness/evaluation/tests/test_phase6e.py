@@ -179,6 +179,7 @@ class ArtifactSchemaTests(unittest.TestCase):
             backend_ref="fake",
         )
         self.assertEqual(record["dataset_id"], "calibration:phase6e:probes")
+        self.assertEqual(record["dataset_version"], "2")
         self.assertEqual(record["case_id"], "PROBE-S1")
         self.assertEqual(record["final_verdict"], FAIL)
 

@@ -40,7 +40,7 @@ MISSING_SEMANTICS = (
     "COMPACTION_RETRY_SAME_STEP",
 )
 
-_CALL_TYPES = {"function_call", "custom_tool_call"}
+_CALL_TYPES = {"function_call", "custom_tool_call", "local_shell_call"}
 _OUTPUT_TYPES = {"function_call_output", "custom_tool_call_output"}
 
 
@@ -198,18 +198,34 @@ class CodexAdapter:
                 continue
             if rtype in _CALL_TYPES:
                 if current is None:
-                    raise ValueError(
-                        f"tool call without assistant message (line {line_no})",
+                    # Real Codex traces can put the tool call before the
+                    # assistant message (reasoning -> call -> output -> message).
+                    # Start an empty segment so the call is not dropped; the
+                    # following assistant message flushes it as its own step.
+                    current = _Segment(
+                        self.rollout_path,
+                        line_no,
+                        "",
+                        source_event_type=rtype,
                     )
-                call_id = payload.get("call_id", "")
-                name = payload["name"]
-                raw_args = payload.get(
-                    "arguments" if rtype == "function_call" else "input",
-                    "",
-                )
-                current.calls.append(
-                    _Call(call_id, name, _parse_args(raw_args)),
-                )
+                if rtype == "local_shell_call":
+                    call_id = payload.get("call_id") or payload.get("id") or ""
+                    name = "shell_command"
+                    action = payload.get("action") or {}
+                    arguments = {"command": action.get("command") or []}
+                    if action.get("working_directory"):
+                        arguments["working_directory"] = action[
+                            "working_directory"
+                        ]
+                else:
+                    call_id = payload.get("call_id", "")
+                    name = payload["name"]
+                    raw_args = payload.get(
+                        "arguments" if rtype == "function_call" else "input",
+                        "",
+                    )
+                    arguments = _parse_args(raw_args)
+                current.calls.append(_Call(call_id, name, arguments))
                 self.call_metadata[call_id] = BackendMappingMetadata(
                     mapping_quality=LOSSY,
                     raw_event_ref=_ref(self.rollout_path, line_no),
@@ -308,7 +324,13 @@ class _Call:
 class _Segment:
     """Accumulates one sampling request; flattened at flush time."""
 
-    def __init__(self, rollout_path: Path, start_line: int, text: str) -> None:
+    def __init__(
+        self,
+        rollout_path: Path,
+        start_line: int,
+        text: str,
+        source_event_type: str = "message",
+    ) -> None:
         self.rollout_path = rollout_path
         self.start_line = start_line
         self.text = text
@@ -316,7 +338,7 @@ class _Segment:
         self.metadata = BackendMappingMetadata(
             mapping_quality=ADAPTER,
             raw_event_ref=_ref(rollout_path, start_line),
-            source_event_type="message",
+            source_event_type=source_event_type,
         )
 
     def events(

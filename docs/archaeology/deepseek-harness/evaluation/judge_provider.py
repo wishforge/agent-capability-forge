@@ -61,9 +61,7 @@ from llm_judge import (
     MEDIUM,
     PASS,
     UNKNOWN,
-    VIOLATED,
     OracleReference,
-    SUFFICIENT,
     TASK_JUDGE_01,
     TASK_JUDGE_01_RECORD,
     TASK_JUDGE_02,
@@ -80,7 +78,7 @@ from llm_judge import (
     assess_evidence,
     assess_conditions,
     check_behavioral,
-    condition_findings,
+    contract_guard,
     condition_verdict,
     _dedupe_refs,
     _default_evidence,
@@ -125,11 +123,51 @@ def _deepseek_config() -> tuple[str, str, str]:
     )
 
 
-@lru_cache(maxsize=1)
-def provider_status() -> tuple[bool, str]:
-    """True if DeepSeek is reachable; never returns or logs the secret."""
+def _provider_credentials(name: str) -> tuple[str, str]:
+    """Resolve (base_url, api_key) for an OpenAI-compatible provider entry.
+
+    Secrets are consumed in-process and never returned to callers that log
+    them; the returned key is used only to construct an SDK client.
+    """
+    cfg = tomllib.loads(
+        pathlib.Path(os.path.expanduser("~/.codex/config.toml")).read_text(
+            encoding="utf-8"
+        ),
+    )
+    prov = cfg["model_providers"][name]
+    base_url = prov["base_url"].rstrip("/")
+    token = prov.get("experimental_bearer_token")
+    if token:
+        return base_url, token
+    env_key = prov.get("env_key")
+    if env_key:
+        token = os.environ.get(env_key)
+        if token:
+            return base_url, token
+        raise KeyError(f"env_key {env_key!r} not set")
+    raise KeyError(f"provider {name!r} has no credential source")
+
+
+def _provider_model(name: str) -> str:
+    cfg = tomllib.loads(
+        pathlib.Path(os.path.expanduser("~/.codex/config.toml")).read_text(
+            encoding="utf-8"
+        ),
+    )
+    return (
+        cfg["model_providers"][name].get("model")
+        or cfg.get("model")
+        or DEFAULT_MODEL
+    )
+
+
+@lru_cache(maxsize=4)
+def provider_status(name: str = "deepseek") -> tuple[bool, str]:
+    """True if the named OpenAI-compatible provider is reachable; never
+    returns or logs the secret."""
     try:
-        base_url, api_key, model = _deepseek_config()
+        base_url, api_key = _provider_credentials(name)
+        model = _provider_model(name)
     except Exception as exc:
         return False, f"config unavailable: {type(exc).__name__}: {exc}"
     try:
@@ -140,7 +178,7 @@ def provider_status() -> tuple[bool, str]:
             max_retries=0,
         )
         models = client.models.list()
-        return True, f"provider=deepseek model={model} models={sorted(m.id for m in models.data)}"
+        return True, f"provider={name} model={model} models={sorted(m.id for m in models.data)}"
     except Exception as exc:
         return False, f"unreachable: {type(exc).__name__}: {str(exc)[:120]}"
 
@@ -306,6 +344,7 @@ class DeepSeekJudgeProvider:
         seed: int | None = 42,
         max_tokens: int = 8192,
         prompt_key: str = "A",
+        backend_ref: str = "deepseek",
         client: Any = None,
     ) -> None:
         self.model = model or DEFAULT_MODEL
@@ -317,19 +356,22 @@ class DeepSeekJudgeProvider:
         self.seed = seed
         self.max_tokens = max_tokens
         self.prompt_key = prompt_key
+        self.backend_ref = backend_ref
         self._client = client
         self.last_usage: dict | None = None
+        self.last_payload: dict | None = None
 
     def _ensure_client(self) -> OpenAI:
         if self._client is None:
-            base_url, api_key, configured_model = _deepseek_config()
-            self.base_url = base_url
-            self.api_key = api_key
-            if self.model == DEFAULT_MODEL:
-                self.model = configured_model
+            if not self.base_url or not self.api_key:
+                base_url, api_key, configured_model = _deepseek_config()
+                self.base_url = base_url
+                self.api_key = api_key
+                if self.model == DEFAULT_MODEL:
+                    self.model = configured_model
             self._client = OpenAI(
-                api_key=api_key,
-                base_url=base_url,
+                api_key=self.api_key,
+                base_url=self.base_url,
                 timeout=self.timeout,
                 max_retries=self.max_retries,
             )
@@ -462,166 +504,12 @@ class DeepSeekJudgeProvider:
                 ref for finding in findings for ref in finding.evidence_refs
             ),
             confidence=final_confidence,
-            model_ref=f"deepseek:{self.model}",
+            model_ref=f"{self.backend_ref}:{self.model}",
             model_version="UNKNOWN",
             prompt_ref=template.prompt_ref,
             prompt_version=template.prompt_version,
             rubric_ref={"rubric_id": rubric.rubric_id, "version": rubric.version},
         )
-
-    def _contract_guard(self, jinput: LLMJudgeInput, result: LLMJudgeResult) -> LLMJudgeResult:
-        """Enforce evidence sufficiency + behavioral oracle facts even when the
-        model ignores them. Confidence never overrides these guards."""
-        record = jinput.execution_record
-        reasons = []
-        if not _context_provenance(record):
-            reasons.append("context provenance missing; agent-visible context cannot be verified")
-        if _has_lossy_evidence(record):
-            reasons.append("LOSSY backend evidence present; semantic judgment cannot be EXACT")
-        if not _final_messages(record):
-            reasons.append("no final assistant message in record; output semantics cannot be judged")
-        assessment = assess_evidence(record, jinput.task_specification, jinput.oracle_reference)
-        if assessment.verdict != SUFFICIENT:
-            reasons.append(
-                f"evidence_sufficiency={assessment.verdict}: "
-                + "; ".join(assessment.reasons)
-            )
-        if reasons:
-            message = "; ".join(reasons)
-            findings = tuple(
-                JudgeFinding(
-                    criterion.criterion_id,
-                    INCONCLUSIVE,
-                    message,
-                    _default_evidence(jinput, criterion.criterion_id),
-                )
-                for criterion in jinput.rubric.criteria
-            )
-            return LLMJudgeResult(
-                judge_id=result.judge_id,
-                status=INCONCLUSIVE,
-                score=None,
-                reasoning_summary=f"{result.reasoning_summary} | contract guard: {message}",
-                findings=findings,
-                evidence_refs=result.evidence_refs,
-                confidence=LOW,
-                model_ref=result.model_ref,
-                model_version=result.model_version,
-                prompt_ref=result.prompt_ref,
-                prompt_version=result.prompt_version,
-                rubric_ref=result.rubric_ref,
-            )
-        behavioral = check_behavioral(
-            record,
-            jinput.task_specification,
-            jinput.oracle_reference,
-        )
-        behavioral_fail = tuple(finding for finding in behavioral if finding.status == FAIL)
-        behavioral_inconclusive = tuple(
-            finding for finding in behavioral if finding.status == INCONCLUSIVE
-        )
-        conditions = assess_conditions(record, jinput.oracle_reference)
-        conditions_verdict = condition_verdict(conditions)
-        if behavioral_fail:
-            message = "; ".join(finding.message for finding in behavioral_fail)
-            return LLMJudgeResult(
-                judge_id=result.judge_id,
-                status=FAIL,
-                score=result.score,
-                reasoning_summary=(
-                    f"{result.reasoning_summary} | oracle behavioral guard: {message}"
-                ),
-                findings=result.findings
-                + tuple(
-                    JudgeFinding(
-                        finding.rule_id,
-                        finding.status,
-                        finding.message,
-                        finding.evidence_refs,
-                    )
-                    for finding in behavioral_fail
-                ),
-                evidence_refs=result.evidence_refs,
-                confidence=result.confidence,
-                model_ref=result.model_ref,
-                model_version=result.model_version,
-                prompt_ref=result.prompt_ref,
-                prompt_version=result.prompt_version,
-                rubric_ref=result.rubric_ref,
-            )
-        if conditions_verdict == FAIL:
-            message = "; ".join(
-                assessment.reason
-                for assessment in conditions
-                if assessment.status == VIOLATED
-            )
-            return LLMJudgeResult(
-                judge_id=result.judge_id,
-                status=FAIL,
-                score=result.score,
-                reasoning_summary=(
-                    f"{result.reasoning_summary} | condition oracle guard: {message}"
-                ),
-                findings=result.findings + condition_findings(conditions),
-                evidence_refs=result.evidence_refs,
-                confidence=result.confidence,
-                model_ref=result.model_ref,
-                model_version=result.model_version,
-                prompt_ref=result.prompt_ref,
-                prompt_version=result.prompt_version,
-                rubric_ref=result.rubric_ref,
-            )
-        if behavioral_inconclusive:
-            message = "; ".join(finding.message for finding in behavioral_inconclusive)
-            return LLMJudgeResult(
-                judge_id=result.judge_id,
-                status=INCONCLUSIVE,
-                score=None,
-                reasoning_summary=(
-                    f"{result.reasoning_summary} | oracle behavioral guard: {message}"
-                ),
-                findings=result.findings
-                + tuple(
-                    JudgeFinding(
-                        finding.rule_id,
-                        finding.status,
-                        finding.message,
-                        finding.evidence_refs,
-                    )
-                    for finding in behavioral_inconclusive
-                ),
-                evidence_refs=result.evidence_refs,
-                confidence=LOW,
-                model_ref=result.model_ref,
-                model_version=result.model_version,
-                prompt_ref=result.prompt_ref,
-                prompt_version=result.prompt_version,
-                rubric_ref=result.rubric_ref,
-            )
-        if conditions_verdict == INCONCLUSIVE:
-            message = "; ".join(
-                assessment.reason
-                for assessment in conditions
-                if assessment.status == UNKNOWN
-            )
-            return LLMJudgeResult(
-                judge_id=result.judge_id,
-                status=INCONCLUSIVE,
-                score=None,
-                reasoning_summary=(
-                    f"{result.reasoning_summary} | condition oracle guard: {message}"
-                ),
-                findings=result.findings + condition_findings(conditions),
-                evidence_refs=result.evidence_refs,
-                confidence=LOW,
-                model_ref=result.model_ref,
-                model_version=result.model_version,
-                prompt_ref=result.prompt_ref,
-                prompt_version=result.prompt_version,
-                rubric_ref=result.rubric_ref,
-            )
-        if not reasons:
-            return result
 
     def judge(
         self,
@@ -633,8 +521,9 @@ class DeepSeekJudgeProvider:
         rubric = rubric or jinput.rubric
         template = PROMPT_TEMPLATES[prompt_key or self.prompt_key]
         payload = self._create(_render_prompt(jinput, rubric, template))
+        self.last_payload = payload
         result = self._parse(jinput, rubric, payload, template)
-        return self._contract_guard(jinput, result)
+        return contract_guard(jinput, result)
 
 
 @dataclass(frozen=True, slots=True)

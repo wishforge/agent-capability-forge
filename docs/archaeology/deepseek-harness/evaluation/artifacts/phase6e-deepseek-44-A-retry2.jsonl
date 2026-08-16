@@ -1,0 +1,1 @@
+{"case_id": "CAL-34", "prompt_key": "A", "backend_ref": "deepseek", "provider_error": {"kind": "INVALID_OUTPUT", "message": "no JSON object in provider output"}, "timestamp": "2026-08-16T13:35:49.166602+00:00"}

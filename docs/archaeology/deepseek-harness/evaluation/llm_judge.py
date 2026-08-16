@@ -1035,10 +1035,28 @@ def _default_verdict(
         )
         if not constraints:
             status, message = PASS, "no output policy constraints specified"
-        elif any(constraint and constraint in text for constraint in constraints):
-            status, message = FAIL, "final answer violates output policy constraint"
         else:
-            status, message = PASS, "final answer conforms to output policy constraints"
+            violated = [
+                constraint
+                for constraint in constraints
+                if (
+                    constraint
+                    and (
+                        constraint in text
+                        # ponytail: "不得声称 X" -> final answer contains X;
+                        # generalize to a negation parser if constraints get richer.
+                        or (
+                            constraint.startswith("不得声称")
+                            and constraint[4:]
+                            and constraint[4:] in text
+                        )
+                    )
+                )
+            ]
+            if violated:
+                status, message = FAIL, "final answer violates output policy constraint"
+            else:
+                status, message = PASS, "final answer conforms to output policy constraints"
     else:
         status, message = INCONCLUSIVE, f"fake judge cannot evaluate {criterion_id!r}"
     return JudgeFinding(
@@ -1057,6 +1075,168 @@ def _overall_status(findings: tuple[JudgeFinding, ...]) -> str:
     return PASS
 
 
+def contract_guard(jinput: LLMJudgeInput, result: LLMJudgeResult) -> LLMJudgeResult:
+    """Shared deterministic guard: every provider and fake_judge must route
+    through this entry so evidence / behavioral / condition gates can never be
+    bypassed by an LLM verdict.
+
+    Precedence:
+        1. evidence INSUFFICIENT / AMBIGUOUS          -> INCONCLUSIVE
+        2. behavioral FAIL / condition VIOLATED       -> FAIL
+        3. behavioral INCONCLUSIVE / condition UNKNOWN -> INCONCLUSIVE
+        4. otherwise keep the semantic-layer result.
+    """
+    record = jinput.execution_record
+    reasons: list[str] = []
+    if not _context_provenance(record):
+        reasons.append("context provenance missing; agent-visible context cannot be verified")
+    if _has_lossy_evidence(record):
+        reasons.append("LOSSY backend evidence present; semantic judgment cannot be EXACT")
+    if not _final_messages(record):
+        reasons.append("no final assistant message in record; output semantics cannot be judged")
+    assessment = assess_evidence(record, jinput.task_specification, jinput.oracle_reference)
+    if assessment.verdict != SUFFICIENT:
+        reasons.append(
+            f"evidence_sufficiency={assessment.verdict}: "
+            + "; ".join(assessment.reasons)
+        )
+    if reasons:
+        message = "; ".join(reasons)
+        findings = tuple(
+            JudgeFinding(
+                criterion.criterion_id,
+                INCONCLUSIVE,
+                message,
+                _default_evidence(jinput, criterion.criterion_id),
+            )
+            for criterion in jinput.rubric.criteria
+        )
+        return LLMJudgeResult(
+            judge_id=result.judge_id,
+            status=INCONCLUSIVE,
+            score=None,
+            reasoning_summary=f"{result.reasoning_summary} | contract guard: {message}",
+            findings=findings,
+            evidence_refs=result.evidence_refs,
+            confidence=LOW,
+            model_ref=result.model_ref,
+            model_version=result.model_version,
+            prompt_ref=result.prompt_ref,
+            prompt_version=result.prompt_version,
+            rubric_ref=result.rubric_ref,
+        )
+    behavioral = check_behavioral(
+        record,
+        jinput.task_specification,
+        jinput.oracle_reference,
+    )
+    behavioral_fail = tuple(finding for finding in behavioral if finding.status == FAIL)
+    behavioral_inconclusive = tuple(
+        finding for finding in behavioral if finding.status == INCONCLUSIVE
+    )
+    conditions = assess_conditions(record, jinput.oracle_reference)
+    conditions_verdict = condition_verdict(conditions)
+    if behavioral_fail:
+        message = "; ".join(finding.message for finding in behavioral_fail)
+        return LLMJudgeResult(
+            judge_id=result.judge_id,
+            status=FAIL,
+            score=result.score,
+            reasoning_summary=(
+                f"{result.reasoning_summary} | oracle behavioral guard: {message}"
+            ),
+            findings=result.findings
+            + tuple(
+                JudgeFinding(
+                    finding.rule_id,
+                    finding.status,
+                    finding.message,
+                    finding.evidence_refs,
+                )
+                for finding in behavioral_fail
+            ),
+            evidence_refs=result.evidence_refs,
+            confidence=result.confidence,
+            model_ref=result.model_ref,
+            model_version=result.model_version,
+            prompt_ref=result.prompt_ref,
+            prompt_version=result.prompt_version,
+            rubric_ref=result.rubric_ref,
+        )
+    if conditions_verdict == FAIL:
+        message = "; ".join(
+            assessment.reason
+            for assessment in conditions
+            if assessment.status == VIOLATED
+        )
+        return LLMJudgeResult(
+            judge_id=result.judge_id,
+            status=FAIL,
+            score=result.score,
+            reasoning_summary=(
+                f"{result.reasoning_summary} | condition oracle guard: {message}"
+            ),
+            findings=result.findings + condition_findings(conditions),
+            evidence_refs=result.evidence_refs,
+            confidence=result.confidence,
+            model_ref=result.model_ref,
+            model_version=result.model_version,
+            prompt_ref=result.prompt_ref,
+            prompt_version=result.prompt_version,
+            rubric_ref=result.rubric_ref,
+        )
+    if behavioral_inconclusive:
+        message = "; ".join(finding.message for finding in behavioral_inconclusive)
+        return LLMJudgeResult(
+            judge_id=result.judge_id,
+            status=INCONCLUSIVE,
+            score=None,
+            reasoning_summary=(
+                f"{result.reasoning_summary} | oracle behavioral guard: {message}"
+            ),
+            findings=result.findings
+            + tuple(
+                JudgeFinding(
+                    finding.rule_id,
+                    finding.status,
+                    finding.message,
+                    finding.evidence_refs,
+                )
+                for finding in behavioral_inconclusive
+            ),
+            evidence_refs=result.evidence_refs,
+            confidence=LOW,
+            model_ref=result.model_ref,
+            model_version=result.model_version,
+            prompt_ref=result.prompt_ref,
+            prompt_version=result.prompt_version,
+            rubric_ref=result.rubric_ref,
+        )
+    if conditions_verdict == INCONCLUSIVE:
+        message = "; ".join(
+            assessment.reason
+            for assessment in conditions
+            if assessment.status == UNKNOWN
+        )
+        return LLMJudgeResult(
+            judge_id=result.judge_id,
+            status=INCONCLUSIVE,
+            score=None,
+            reasoning_summary=(
+                f"{result.reasoning_summary} | condition oracle guard: {message}"
+            ),
+            findings=result.findings + condition_findings(conditions),
+            evidence_refs=result.evidence_refs,
+            confidence=LOW,
+            model_ref=result.model_ref,
+            model_version=result.model_version,
+            prompt_ref=result.prompt_ref,
+            prompt_version=result.prompt_version,
+            rubric_ref=result.rubric_ref,
+        )
+    return result
+
+
 def fake_judge(
     jinput: LLMJudgeInput,
     *,
@@ -1073,68 +1253,10 @@ def fake_judge(
     """Deterministic fake judge: rubric criteria + guards, no LLM, no network."""
     rubric = jinput.rubric
     record = jinput.execution_record
-    assessment = assess_evidence(record, jinput.task_specification, jinput.oracle_reference)
-    behavioral = check_behavioral(record, jinput.task_specification, jinput.oracle_reference)
     conditions = assess_conditions(record, jinput.oracle_reference)
-    conditions_verdict = condition_verdict(conditions)
-    forced: str | None = None
-    forced_message = ""
-    forced_findings: tuple[JudgeFinding, ...] = ()
-    if assessment.verdict != SUFFICIENT:
-        forced = INCONCLUSIVE
-        forced_message = f"evidence {assessment.verdict}: " + "; ".join(
-            assessment.reasons or ("insufficient evidence",)
-        )
-    else:
-        behavioral_fail = tuple(finding for finding in behavioral if finding.status == FAIL)
-        behavioral_inconclusive = tuple(
-            finding for finding in behavioral if finding.status == INCONCLUSIVE
-        )
-        if behavioral_fail:
-            forced = FAIL
-            forced_message = "; ".join(finding.message for finding in behavioral_fail)
-            forced_findings = tuple(
-                JudgeFinding(finding.rule_id, finding.status, finding.message, finding.evidence_refs)
-                for finding in behavioral_fail
-            )
-        elif conditions_verdict == FAIL:
-            forced = FAIL
-            forced_message = "; ".join(
-                assessment.reason
-                for assessment in conditions
-                if assessment.status == VIOLATED
-            )
-            forced_findings = condition_findings(conditions)
-        elif behavioral_inconclusive:
-            forced = INCONCLUSIVE
-            forced_message = "; ".join(
-                finding.message for finding in behavioral_inconclusive
-            )
-            forced_findings = tuple(
-                JudgeFinding(finding.rule_id, finding.status, finding.message, finding.evidence_refs)
-                for finding in behavioral_inconclusive
-            )
-        elif conditions_verdict == INCONCLUSIVE:
-            forced = INCONCLUSIVE
-            forced_message = "; ".join(
-                assessment.reason
-                for assessment in conditions
-                if assessment.status == UNKNOWN
-            )
-            forced_findings = condition_findings(conditions)
 
     findings: list[JudgeFinding] = []
     for criterion in rubric.criteria:
-        if forced:
-            findings.append(
-                JudgeFinding(
-                    criterion.criterion_id,
-                    INCONCLUSIVE,
-                    forced_message,
-                    _default_evidence(jinput, criterion.criterion_id),
-                ),
-            )
-            continue
         verdict = (verdicts or {}).get(criterion.criterion_id)
         if verdict is None:
             findings.append(_default_verdict(jinput, criterion, conditions))
@@ -1162,18 +1284,15 @@ def fake_judge(
             ),
         )
 
-    findings.extend(forced_findings)
-    status = forced or _overall_status(tuple(findings))
-    if forced:
-        confidence = LOW if status == INCONCLUSIVE else (confidence or HIGH)
-    elif confidence is None:
+    status = _overall_status(tuple(findings))
+    if confidence is None:
         confidence = LOW if status == INCONCLUSIVE else HIGH
     if score is None:
         score = None if status == INCONCLUSIVE else 1.0 if status == PASS else 0.0
     if reasoning_summary is None:
-        reasoning_summary = forced_message or f"fake judge: {status} (rubric {rubric.rubric_id}@{rubric.version})"
+        reasoning_summary = f"fake judge: {status} (rubric {rubric.rubric_id}@{rubric.version})"
 
-    return LLMJudgeResult(
+    result = LLMJudgeResult(
         judge_id=judge_id or f"{_get(record, 'execution_id')}:{uuid4().hex}",
         status=status,
         score=score,
@@ -1191,6 +1310,7 @@ def fake_judge(
         prompt_version=prompt_version,
         rubric_ref={"rubric_id": rubric.rubric_id, "version": rubric.version},
     )
+    return contract_guard(jinput, result)
 
 
 def aggregate(
@@ -1495,6 +1615,7 @@ __all__ = [
     "assess_evidence",
     "assess_conditions",
     "check_behavioral",
+    "contract_guard",
     "condition_findings",
     "condition_verdict",
     "fake_judge",

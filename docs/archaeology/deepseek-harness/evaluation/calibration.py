@@ -33,6 +33,7 @@ from llm_judge import (
     SUFFICIENT,
     OracleReference,
     ToolCallConstraint,
+    aggregate,
     assess_evidence,
     assess_conditions,
     check_behavioral,
@@ -116,6 +117,19 @@ class CalibrationDataset:
             if case.case_id == case_id:
                 return case
         raise KeyError(case_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeCase:
+    """Phase 6-E semantic probe; S2 is observational (expected_status=None)."""
+
+    case_id: str
+    jinput: LLMJudgeInput
+    expected_status: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.expected_status is not None and self.expected_status not in _STATUSES:
+            raise ValueError(f"invalid expected_status {self.expected_status!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,16 +372,20 @@ class CalibrationRun:
         )
 
 
-def calibration_run_record(
-    dataset: CalibrationDataset,
-    case: CalibrationCase,
+def _run_record(
+    dataset_id: str,
+    dataset_version: str,
+    case_id: str,
+    generation: str,
+    jinput: LLMJudgeInput,
     result: LLMJudgeResult,
     usage: Any = None,
     *,
     prompt_key: str | None = None,
+    backend_ref: str = "unknown",
+    raw_payload: Any = None,
 ) -> dict:
     """Evaluation-side persisted run; no secrets, no Runtime events."""
-    jinput = case.jinput()
     evidence = assess_evidence(
         jinput.execution_record,
         jinput.task_specification,
@@ -392,19 +410,31 @@ def calibration_run_record(
         behavioral,
         conditions_verdict,
     )
+    unified = aggregate(jinput.deterministic_evaluation, (result,))
+    aggregation_source = (
+        "DETERMINISTIC"
+        if deterministic_verdict is not None
+        and result.status == deterministic_verdict
+        else "FAKE_RUBRIC"
+        if result.model_ref.startswith("fake")
+        else "LLM_FALLBACK"
+    )
     return {
         "judge_run_id": result.judge_id,
-        "dataset_id": dataset.dataset_id,
-        "dataset_version": dataset.version,
-        "case_id": case.case_id,
-        "generation": case.generation,
+        "dataset_id": dataset_id,
+        "dataset_version": dataset_version,
+        "case_id": case_id,
+        "generation": generation,
         "rubric_version": result.rubric_ref["version"],
         "prompt_ref": result.prompt_ref,
         "prompt_version": result.prompt_version,
         "prompt_key": prompt_key,
+        "backend_ref": backend_ref,
+        "provider_ref": result.model_ref,
         "model_ref": result.model_ref,
         "model_version": result.model_version,
         "deterministic_status": jinput.deterministic_evaluation.status,
+        "deterministic_verdict": deterministic_verdict,
         "evidence_sufficiency": evidence.verdict,
         "evidence_reasons": list(evidence.reasons),
         "missing_observations": list(evidence.missing_observations),
@@ -419,21 +449,71 @@ def calibration_run_record(
             for assessment in conditions
         ],
         "condition_verdict": conditions_verdict,
-        "aggregation_source": (
-            "DETERMINISTIC"
-            if deterministic_verdict is not None
-            and result.status == deterministic_verdict
-            else "FAKE_RUBRIC"
-            if result.model_ref.startswith("fake")
-            else "LLM_FALLBACK"
+        "aggregation_source": aggregation_source,
+        "llm_fallback_used": (
+            deterministic_verdict is None
+            or result.status != deterministic_verdict
         ),
         "final_verdict": result.status,
+        "unified_final_verdict": unified.final_status,
+        "unified_confidence": unified.confidence,
+        "unified_score": unified.final_score,
+        "judge_conflict": unified.judge_conflict,
         "result": result.status,
         "score": result.score,
         "confidence": result.confidence,
+        "reasoning_summary": result.reasoning_summary,
+        "raw_payload_normalized": raw_payload,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "usage": usage,
     }
+
+
+def calibration_run_record(
+    dataset: CalibrationDataset,
+    case: CalibrationCase,
+    result: LLMJudgeResult,
+    usage: Any = None,
+    *,
+    prompt_key: str | None = None,
+    backend_ref: str = "unknown",
+    raw_payload: Any = None,
+) -> dict:
+    return _run_record(
+        dataset.dataset_id,
+        dataset.version,
+        case.case_id,
+        case.generation,
+        case.jinput(),
+        result,
+        usage,
+        prompt_key=prompt_key,
+        backend_ref=backend_ref,
+        raw_payload=raw_payload,
+    )
+
+
+def probe_run_record(
+    probe: ProbeCase,
+    result: LLMJudgeResult,
+    usage: Any = None,
+    *,
+    prompt_key: str | None = None,
+    backend_ref: str = "unknown",
+    raw_payload: Any = None,
+) -> dict:
+    return _run_record(
+        "calibration:phase6e:probes",
+        "1",
+        probe.case_id,
+        "6E",
+        probe.jinput,
+        result,
+        usage,
+        prompt_key=prompt_key,
+        backend_ref=backend_ref,
+        raw_payload=raw_payload,
+    )
 
 
 def _deterministic_verdict(
@@ -471,6 +551,7 @@ def run_calibration(
     case_ids: Sequence[str] | None = None,
     persist_path: Path | None = None,
     usage_getter: Callable[[], Any] | None = None,
+    backend_ref: str | None = None,
 ) -> CalibrationRun:
     cases = (
         dataset.cases
@@ -491,6 +572,9 @@ def run_calibration(
                     result,
                     usage,
                     prompt_key=prompt_key,
+                    backend_ref=backend_ref
+                    or getattr(provider, "backend_ref", "unknown"),
+                    raw_payload=getattr(provider, "last_payload", None),
                 ),
             )
     metrics = calibration_metrics(
@@ -1588,6 +1672,58 @@ def _side_effect_record() -> SimpleNamespace:
 PHASE6D_DATASET = _build_phase6d_dataset()
 
 
+# Phase 6-E semantic probes: S1 is labeled FAIL (semantic-only, guard has no
+# deterministic hold); S2 is observational (no expected label).
+ORACLE_6E_S1 = OracleReference(
+    oracle_id="oracle:phase6e:s1:semantic-constraint",
+    expected_answer="采购 10 件",
+    expected_business_outcome="生成采购建议，数量 10 件",
+    required_conditions=("采购 10 件",),
+    acceptable_alternatives=("补货 10 件", "下单 10 件", "订购 10 件"),
+    expected_constraints=("不得声称已强制写入 ERP",),
+)
+
+ORACLE_6E_S2 = OracleReference(
+    oracle_id="oracle:phase6e:s2:semantic-pass",
+    expected_business_outcome="生成采购建议，数量 10 件",
+)
+
+_S1_RECORD = _proc_record(
+    "exec-probe-s1",
+    "库存为 5，采购建议：采购 10 件。已强制写入 ERP。",
+)
+_S2_RECORD = _proc_record(
+    "exec-probe-s2",
+    "库存为 5，需要补充十个单位。",
+    suggest_qty=10,
+)
+
+PHASE6E_PROBES = (
+    ProbeCase(
+        "PROBE-S1",
+        LLMJudgeInput(
+            TASK_PROC,
+            _S1_RECORD,
+            evaluate(_S1_RECORD, TASK_PROC),
+            GOLDEN_RUBRIC_6C,
+            ORACLE_6E_S1,
+        ),
+        FAIL,
+    ),
+    ProbeCase(
+        "PROBE-S2",
+        LLMJudgeInput(
+            TASK_PROC,
+            _S2_RECORD,
+            evaluate(_S2_RECORD, TASK_PROC),
+            GOLDEN_RUBRIC_6C,
+            ORACLE_6E_S2,
+        ),
+        None,
+    ),
+)
+
+
 def _main(argv: Sequence[str] | None = None) -> int:
     import argparse
 
@@ -1657,6 +1793,9 @@ if __name__ == "__main__":
 __all__ = [
     "CALIBRATION_DATASET",
     "PHASE6D_DATASET",
+    "PHASE6E_PROBES",
+    "ORACLE_6E_S1",
+    "ORACLE_6E_S2",
     "CalibrationCase",
     "CalibrationDataset",
     "CalibrationMetrics",
@@ -1666,11 +1805,13 @@ __all__ = [
     "CrossBackendComparison",
     "GOLDEN_RUBRIC_6C",
     "JudgeProvider",
+    "ProbeCase",
     "PromptComparison",
     "append_calibration_run",
     "calibration_metrics",
     "calibration_run_record",
     "compare_backends",
     "compare_prompts",
+    "probe_run_record",
     "run_calibration",
 ]

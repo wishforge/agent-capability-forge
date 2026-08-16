@@ -1,0 +1,453 @@
+{
+  "second_backend_status": [
+    true,
+    "provider=Model_Studio_Token_Plan_Personal model=qwen3.7-plus models=['deepseek-v4-flash-0731', 'deepseek-v4-pro', 'glm-5.2', 'qwen-audio-3.0-realtime-plus', 'qwen-audio-3.0-tts-plus', 'qwen3.6-flash', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.8-max', 'wan2.7-image', 'wan2.7-image-pro']"
+  ],
+  "run_counts": {
+    "fake": {
+      "A": 44,
+      "B": 44,
+      "C": 44
+    },
+    "deepseek": {
+      "A": 44,
+      "B": 44,
+      "C": 44
+    },
+    "model_studio": {
+      "A": 44,
+      "B": 42,
+      "C": 44
+    }
+  },
+  "provider_errors": {
+    "deepseek": 4,
+    "model_studio": 3
+  },
+  "deterministic": {
+    "cases": 44,
+    "rules_status_agreement": 1.0,
+    "evidence_agreement": 1.0,
+    "behavioral_agreement": 1.0,
+    "condition_agreement": 1.0,
+    "deterministic_verdict_agreement": 1.0
+  },
+  "judge_layer": {
+    "prompt_agreement": {
+      "A": 0.9848484848484849,
+      "B": 0.9696969696969696,
+      "C": 0.9848484848484849
+    },
+    "backend_agreement": {
+      "fake": 1.0,
+      "deepseek": 0.9848484848484849,
+      "model_studio": 1.0
+    },
+    "overall": 0.9835858585858586
+  },
+  "unified_layer": {
+    "prompt_agreement": {
+      "A": 1.0,
+      "B": 0.9848484848484849,
+      "C": 1.0
+    },
+    "backend_agreement": {
+      "fake": 1.0,
+      "deepseek": 0.9848484848484849,
+      "model_studio": 1.0
+    },
+    "overall": 0.9949494949494949
+  },
+  "false_pass": {
+    "fake": {
+      "A": 1,
+      "B": 1,
+      "C": 1
+    },
+    "deepseek": {
+      "A": 0,
+      "B": 0,
+      "C": 0
+    },
+    "model_studio": {
+      "A": 0,
+      "B": 0,
+      "C": 0
+    }
+  },
+  "false_fail": {
+    "fake": {
+      "A": 0,
+      "B": 0,
+      "C": 0
+    },
+    "deepseek": {
+      "A": 0,
+      "B": 0,
+      "C": 0
+    },
+    "model_studio": {
+      "A": 0,
+      "B": 0,
+      "C": 0
+    }
+  },
+  "status_balance": {
+    "fake": {
+      "A": {
+        "PASS": 8,
+        "FAIL": 24,
+        "INCONCLUSIVE": 12
+      },
+      "B": {
+        "PASS": 8,
+        "FAIL": 24,
+        "INCONCLUSIVE": 12
+      },
+      "C": {
+        "PASS": 8,
+        "FAIL": 24,
+        "INCONCLUSIVE": 12
+      }
+    },
+    "deepseek": {
+      "A": {
+        "PASS": 7,
+        "FAIL": 25,
+        "INCONCLUSIVE": 12
+      },
+      "B": {
+        "PASS": 6,
+        "FAIL": 25,
+        "INCONCLUSIVE": 13
+      },
+      "C": {
+        "PASS": 7,
+        "FAIL": 25,
+        "INCONCLUSIVE": 12
+      }
+    },
+    "model_studio": {
+      "A": {
+        "PASS": 7,
+        "FAIL": 25,
+        "INCONCLUSIVE": 12
+      },
+      "B": {
+        "PASS": 7,
+        "FAIL": 25,
+        "INCONCLUSIVE": 10
+      },
+      "C": {
+        "PASS": 7,
+        "FAIL": 25,
+        "INCONCLUSIVE": 12
+      }
+    }
+  },
+  "score": {
+    "disagreement_cases": [
+      "CAL-09",
+      "CAL-10",
+      "CAL-14",
+      "CAL-20",
+      "CAL-21",
+      "CAL-24",
+      "CAL-29",
+      "CAL-31",
+      "CAL-33",
+      "CAL-34",
+      "CAL-35",
+      "CAL-39",
+      "CAL-42",
+      "CAL-43",
+      "CAL-44",
+      "TASK-JUDGE-02",
+      "TASK-JUDGE-03",
+      "TASK-JUDGE-05",
+      "TASK-JUDGE-06"
+    ],
+    "disagreement_case_count": 19,
+    "pair_diffs": 304
+  },
+  "confidence": {
+    "disagreement_cases": [
+      "CAL-14",
+      "CAL-34",
+      "TASK-JUDGE-01",
+      "TASK-JUDGE-06"
+    ],
+    "disagreement_case_count": 4,
+    "pair_diffs": 42
+  },
+  "reasoning_variance_cases": [
+    "TASK-JUDGE-03"
+  ],
+  "transitions": {
+    "PASS->FAIL": [
+      "TASK-JUDGE-03"
+    ],
+    "PASS->INCONCLUSIVE": [
+      "TASK-JUDGE-01"
+    ],
+    "FAIL->PASS": [],
+    "FAIL->INCONCLUSIVE": [],
+    "INCONCLUSIVE->PASS": [
+      "TASK-JUDGE-01"
+    ],
+    "INCONCLUSIVE->FAIL": []
+  },
+  "deterministic_bypass_cases": [],
+  "raw_parse_diffs": [
+    {
+      "case_id": "TASK-JUDGE-04",
+      "backend_ref": "deepseek",
+      "prompt_key": "A",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "TASK-JUDGE-04",
+      "backend_ref": "deepseek",
+      "prompt_key": "B",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "TASK-JUDGE-04",
+      "backend_ref": "model_studio",
+      "prompt_key": "C",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-26",
+      "backend_ref": "model_studio",
+      "prompt_key": "A",
+      "raw_status": "PASS",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-32",
+      "backend_ref": "deepseek",
+      "prompt_key": "A",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-32",
+      "backend_ref": "deepseek",
+      "prompt_key": "B",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-32",
+      "backend_ref": "deepseek",
+      "prompt_key": "C",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-32",
+      "backend_ref": "model_studio",
+      "prompt_key": "A",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-32",
+      "backend_ref": "model_studio",
+      "prompt_key": "B",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-32",
+      "backend_ref": "model_studio",
+      "prompt_key": "C",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-34",
+      "backend_ref": "deepseek",
+      "prompt_key": "B",
+      "raw_status": "INCONCLUSIVE",
+      "final_verdict": "FAIL",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-36",
+      "backend_ref": "model_studio",
+      "prompt_key": "B",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-37",
+      "backend_ref": "model_studio",
+      "prompt_key": "B",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-38",
+      "backend_ref": "deepseek",
+      "prompt_key": "A",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    },
+    {
+      "case_id": "CAL-38",
+      "backend_ref": "deepseek",
+      "prompt_key": "B",
+      "raw_status": "FAIL",
+      "final_verdict": "INCONCLUSIVE",
+      "aggregation_source": "DETERMINISTIC"
+    }
+  ],
+  "llm_fallback_cases": [
+    "TASK-JUDGE-01",
+    "TASK-JUDGE-03"
+  ],
+  "probes": {
+    "PROBE-S1": {
+      "fake": {
+        "A": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "FAKE_RUBRIC"
+        },
+        "B": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "FAKE_RUBRIC"
+        },
+        "C": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "FAKE_RUBRIC"
+        }
+      },
+      "deepseek": {
+        "A": {
+          "final_verdict": "FAIL",
+          "score": 0.44,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "B": {
+          "final_verdict": "FAIL",
+          "score": 0.44,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "C": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        }
+      },
+      "model_studio": {
+        "A": {
+          "final_verdict": "FAIL",
+          "score": 0.6,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "B": {
+          "final_verdict": "FAIL",
+          "score": 0.6,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "C": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        }
+      }
+    },
+    "PROBE-S2": {
+      "fake": {
+        "A": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "FAKE_RUBRIC"
+        },
+        "B": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "FAKE_RUBRIC"
+        },
+        "C": {
+          "final_verdict": "FAIL",
+          "score": 0.0,
+          "confidence": "HIGH",
+          "aggregation_source": "FAKE_RUBRIC"
+        }
+      },
+      "deepseek": {
+        "A": {
+          "final_verdict": "PASS",
+          "score": 1.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "B": {
+          "final_verdict": "PASS",
+          "score": 1.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "C": {
+          "final_verdict": "PASS",
+          "score": 1.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        }
+      },
+      "model_studio": {
+        "A": {
+          "final_verdict": "PASS",
+          "score": 1.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "B": {
+          "final_verdict": "PASS",
+          "score": 1.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        },
+        "C": {
+          "final_verdict": "PASS",
+          "score": 1.0,
+          "confidence": "HIGH",
+          "aggregation_source": "LLM_FALLBACK"
+        }
+      }
+    }
+  }
+}

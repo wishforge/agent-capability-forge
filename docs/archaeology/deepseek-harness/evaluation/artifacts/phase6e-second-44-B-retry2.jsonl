@@ -1,0 +1,2 @@
+{"case_id": "CAL-15", "prompt_key": "B", "backend_ref": "model_studio", "provider_error": {"kind": "TIMEOUT", "message": "provider timeout: Request timed out."}, "timestamp": "2026-08-16T13:49:53.228878+00:00"}
+{"case_id": "CAL-26", "prompt_key": "B", "backend_ref": "model_studio", "provider_error": {"kind": "INVALID_OUTPUT", "message": "low-confidence PASS is forbidden"}, "timestamp": "2026-08-16T13:50:15.887722+00:00"}

@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
+from typing import Mapping
 
 from events import AGENT_REQUEST, REQUEST_HEADER, SessionEvent
 
@@ -31,6 +32,11 @@ def _encode(event: SessionEvent) -> str:
             "payload": dict(event.payload),
             "timestamp": event.timestamp,
             "source_event_seqs": list(event.source_event_seqs),
+            "surface_op": (
+                dict(event.surface_op)
+                if isinstance(event.surface_op, Mapping)
+                else event.surface_op
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -51,6 +57,7 @@ def _decode(data: dict) -> SessionEvent:
             datetime.now(timezone.utc).isoformat(),
         ),
         source_event_seqs=tuple(data.get("source_event_seqs") or ()),
+        surface_op=data.get("surface_op"),
     )
 
 

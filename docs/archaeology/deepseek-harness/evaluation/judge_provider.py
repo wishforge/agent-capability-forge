@@ -61,6 +61,7 @@ from llm_judge import (
     MEDIUM,
     PASS,
     OracleReference,
+    SUFFICIENT,
     TASK_JUDGE_01,
     TASK_JUDGE_01_RECORD,
     TASK_JUDGE_02,
@@ -74,6 +75,8 @@ from llm_judge import (
     _STATUSES,
     _CONFIDENCES,
     _context_provenance,
+    assess_evidence,
+    check_behavioral,
     _dedupe_refs,
     _default_evidence,
     _final_messages,
@@ -182,6 +185,16 @@ def _render_execution(record: Any) -> dict:
 
 
 def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePromptTemplate) -> str:
+    assessment = assess_evidence(
+        jinput.execution_record,
+        jinput.task_specification,
+        jinput.oracle_reference,
+    )
+    behavioral = check_behavioral(
+        jinput.execution_record,
+        jinput.task_specification,
+        jinput.oracle_reference,
+    )
     evidence = {
         "task_specification": _to_plain(jinput.task_specification),
         "execution_record": _render_execution(jinput.execution_record),
@@ -189,6 +202,15 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
         "rubric": _to_plain(rubric),
         "oracle_reference": _to_plain(jinput.oracle_reference),
         "evidence_refs": [dict(ref) for ref in jinput.evidence_refs],
+        "evidence_sufficiency": {
+            "verdict": assessment.verdict,
+            "reasons": list(assessment.reasons),
+            "missing_observations": list(assessment.missing_observations),
+        },
+        "behavioral_constraints": [
+            {"rule_id": finding.rule_id, "status": finding.status, "message": finding.message}
+            for finding in behavioral
+        ],
     }
     payload = json.dumps(evidence, ensure_ascii=False, indent=2)
     schema = (
@@ -200,7 +222,19 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
         '"message": "...", "evidence_refs": [{"execution_id": "...", '
         '"step_id": "..."}]}]}'
     )
-    if template.prompt_ref.endswith(":A:v1"):
+    if template.prompt_ref.endswith(":C:v1"):
+        instructions = (
+            "You are an independent semantic judge. The JSON input includes "
+            "evidence_sufficiency and behavioral_constraints computed "
+            "deterministically, and both are authoritative: if "
+            "evidence_sufficiency.verdict is not SUFFICIENT, return "
+            "INCONCLUSIVE with LOW confidence; if any "
+            "behavioral_constraints entry has status FAIL, return FAIL "
+            "regardless of the final answer. Judge semantic criteria "
+            "strictly from evidence actually present; never infer missing "
+            "facts."
+        )
+    elif template.prompt_ref.endswith(":A:v1"):
         instructions = (
             "You are an independent semantic judge. Judge the execution "
             "strictly from the evidence in the JSON input below. Do not guess "
@@ -225,6 +259,7 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
 PROMPT_TEMPLATES = {
     "A": JudgePromptTemplate("prompt:phase6b:judge:A:v1", "1"),
     "B": JudgePromptTemplate("prompt:phase6b:judge:B:v1", "1"),
+    "C": JudgePromptTemplate("prompt:phase6d:judge:C:v1", "1"),
 }
 
 
@@ -414,7 +449,8 @@ class DeepSeekJudgeProvider:
         )
 
     def _contract_guard(self, jinput: LLMJudgeInput, result: LLMJudgeResult) -> LLMJudgeResult:
-        """Enforce A6/A7 even when the model ignores lossiness/missing context."""
+        """Enforce evidence sufficiency + behavioral oracle facts even when the
+        model ignores them. Confidence never overrides these guards."""
         record = jinput.execution_record
         reasons = []
         if not _context_provenance(record):
@@ -423,32 +459,102 @@ class DeepSeekJudgeProvider:
             reasons.append("LOSSY backend evidence present; semantic judgment cannot be EXACT")
         if not _final_messages(record):
             reasons.append("no final assistant message in record; output semantics cannot be judged")
+        assessment = assess_evidence(record, jinput.task_specification, jinput.oracle_reference)
+        if assessment.verdict != SUFFICIENT:
+            reasons.append(
+                f"evidence_sufficiency={assessment.verdict}: "
+                + "; ".join(assessment.reasons)
+            )
+        if reasons:
+            message = "; ".join(reasons)
+            findings = tuple(
+                JudgeFinding(
+                    criterion.criterion_id,
+                    INCONCLUSIVE,
+                    message,
+                    _default_evidence(jinput, criterion.criterion_id),
+                )
+                for criterion in jinput.rubric.criteria
+            )
+            return LLMJudgeResult(
+                judge_id=result.judge_id,
+                status=INCONCLUSIVE,
+                score=None,
+                reasoning_summary=f"{result.reasoning_summary} | contract guard: {message}",
+                findings=findings,
+                evidence_refs=result.evidence_refs,
+                confidence=LOW,
+                model_ref=result.model_ref,
+                model_version=result.model_version,
+                prompt_ref=result.prompt_ref,
+                prompt_version=result.prompt_version,
+                rubric_ref=result.rubric_ref,
+            )
+        behavioral = check_behavioral(
+            record,
+            jinput.task_specification,
+            jinput.oracle_reference,
+        )
+        behavioral_fail = tuple(finding for finding in behavioral if finding.status == FAIL)
+        behavioral_inconclusive = tuple(
+            finding for finding in behavioral if finding.status == INCONCLUSIVE
+        )
+        if behavioral_fail:
+            message = "; ".join(finding.message for finding in behavioral_fail)
+            return LLMJudgeResult(
+                judge_id=result.judge_id,
+                status=FAIL,
+                score=result.score,
+                reasoning_summary=(
+                    f"{result.reasoning_summary} | oracle behavioral guard: {message}"
+                ),
+                findings=result.findings
+                + tuple(
+                    JudgeFinding(
+                        finding.rule_id,
+                        finding.status,
+                        finding.message,
+                        finding.evidence_refs,
+                    )
+                    for finding in behavioral_fail
+                ),
+                evidence_refs=result.evidence_refs,
+                confidence=result.confidence,
+                model_ref=result.model_ref,
+                model_version=result.model_version,
+                prompt_ref=result.prompt_ref,
+                prompt_version=result.prompt_version,
+                rubric_ref=result.rubric_ref,
+            )
+        if behavioral_inconclusive:
+            message = "; ".join(finding.message for finding in behavioral_inconclusive)
+            return LLMJudgeResult(
+                judge_id=result.judge_id,
+                status=INCONCLUSIVE,
+                score=None,
+                reasoning_summary=(
+                    f"{result.reasoning_summary} | oracle behavioral guard: {message}"
+                ),
+                findings=result.findings
+                + tuple(
+                    JudgeFinding(
+                        finding.rule_id,
+                        finding.status,
+                        finding.message,
+                        finding.evidence_refs,
+                    )
+                    for finding in behavioral_inconclusive
+                ),
+                evidence_refs=result.evidence_refs,
+                confidence=LOW,
+                model_ref=result.model_ref,
+                model_version=result.model_version,
+                prompt_ref=result.prompt_ref,
+                prompt_version=result.prompt_version,
+                rubric_ref=result.rubric_ref,
+            )
         if not reasons:
             return result
-        message = "; ".join(reasons)
-        findings = tuple(
-            JudgeFinding(
-                criterion.criterion_id,
-                INCONCLUSIVE,
-                message,
-                _default_evidence(jinput, criterion.criterion_id),
-            )
-            for criterion in jinput.rubric.criteria
-        )
-        return LLMJudgeResult(
-            judge_id=result.judge_id,
-            status=INCONCLUSIVE,
-            score=None,
-            reasoning_summary=f"{result.reasoning_summary} | contract guard: {message}",
-            findings=findings,
-            evidence_refs=result.evidence_refs,
-            confidence=LOW,
-            model_ref=result.model_ref,
-            model_version=result.model_version,
-            prompt_ref=result.prompt_ref,
-            prompt_version=result.prompt_version,
-            rubric_ref=result.rubric_ref,
-        )
 
     def judge(
         self,

@@ -214,3 +214,11 @@ confidence / timestamp / usage
 ```
 
 只属于 Evaluation Layer，不写入 Agent Runtime events；不含 secret。
+
+---
+
+**Phase 6-D 后续**：见 `41-phase6d-report.md`（Behavioral Oracle &
+Evidence Sufficiency）。6-D 已修复 CAL-25（PARTIAL + missing required
+evidence → INCONCLUSIVE/LOW）与 CAL-14（tool order misuse → FAIL），
+6-D A / C（N=44）均 agreement 0.955、false pass 0.023、calibration error
+0.061。

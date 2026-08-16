@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 from uuid import uuid4
 
-from models import FAIL, INCONCLUSIVE, PASS, TaskSpecification
+from models import FAIL, Finding, INCONCLUSIVE, PASS, TaskSpecification
 
 HIGH = "HIGH"
 MEDIUM = "MEDIUM"
@@ -27,6 +27,9 @@ LOW = "LOW"
 SUPPORTED = "SUPPORTED"
 UNSUPPORTED = "UNSUPPORTED"
 JUDGE_CONFLICT = "JUDGE_CONFLICT"
+SUFFICIENT = "SUFFICIENT"
+INSUFFICIENT = "INSUFFICIENT"
+AMBIGUOUS = "AMBIGUOUS"
 
 _STATUSES = frozenset({PASS, FAIL, INCONCLUSIVE})
 _CONFIDENCES = frozenset({HIGH, MEDIUM, LOW})
@@ -77,10 +80,54 @@ class OracleReference:
     forbidden_conditions: tuple[str, ...] = ()
     tolerance: float | None = None
     acceptable_alternatives: tuple[str, ...] = ()
+    # Phase 6-D: verifiable behavioral facts (checked deterministically).
+    required_tools: tuple[str, ...] = ()
+    forbidden_tools: tuple[str, ...] = ()
+    required_order: tuple[str, ...] = ()
+    forbidden_order: tuple[str, ...] = ()
+    max_calls: int | None = None
+    tool_call_constraints: tuple["ToolCallConstraint", ...] = ()
+    side_effect_constraints: tuple[str, ...] = ()
+    # Evidence kinds the oracle needs before a verdict is allowed.
+    required_evidence: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.tolerance is not None and self.tolerance < 0:
             raise ValueError(f"oracle tolerance must be >= 0: {self.tolerance!r}")
+        if self.max_calls is not None and self.max_calls < 0:
+            raise ValueError(f"oracle max_calls must be >= 0: {self.max_calls!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallConstraint:
+    """One verifiable fact about calls to a named tool."""
+
+    tool: str
+    min_calls: int | None = None
+    max_calls: int | None = None
+    required_arguments: Mapping[str, Any] | None = None
+    forbidden_arguments: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tool:
+            raise ValueError("tool call constraint requires a tool name")
+        if self.min_calls is not None and self.min_calls < 0:
+            raise ValueError("min_calls must be >= 0")
+        if self.max_calls is not None and self.max_calls < 0:
+            raise ValueError("max_calls must be >= 0")
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceAssessment:
+    """Explicit evidence sufficiency verdict; never inferred by the judge."""
+
+    verdict: str
+    reasons: tuple[str, ...]
+    missing_observations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.verdict not in (SUFFICIENT, INSUFFICIENT, AMBIGUOUS):
+            raise ValueError(f"invalid evidence verdict {self.verdict!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +293,425 @@ def _has_lossy_evidence(record: Any) -> bool:
     return False
 
 
+def _truncated(record: Any) -> bool:
+    if bool(_get(record, "trajectory_truncated", False)):
+        return True
+    reason = str(_get(record, "turn_end_reason", "") or "")
+    return "TRUNCATED" in reason.upper() or reason in ("max_steps_reached", "interrupted")
+
+
+def _missing_semantics(record: Any) -> set[str]:
+    missing: set[str] = set()
+    for prov in tuple(_get(record, "context_provenance", ()) or ()):
+        for token in tuple(_get(prov, "missing_semantics", ()) or ()):
+            if token:
+                missing.add(str(token))
+    return missing
+
+
+def _unresolved_calls(record: Any) -> tuple[Any, ...]:
+    calls = tuple(_get(record, "tools", ()) or ())
+    results = tuple(_get(record, "tool_results", ()) or ())
+    resolved = {_get(result, "tool_call_id") or _get(result, "call_id") for result in results}
+    return tuple(
+        call
+        for call in calls
+        if (_get(call, "call_id") or _get(call, "tool_call_id")) not in resolved
+    )
+
+
+def _conflicting_final_messages(record: Any, oracle: Any) -> bool:
+    messages = tuple(message for message in _final_messages(record) if message)
+    if len(messages) < 2:
+        return False
+    expected = _get(oracle, "expected_answer")
+    required = tuple(_get(oracle, "required_conditions", ()) or ())
+    forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
+    if not (expected or required or forbidden):
+        return False
+    positive = any(
+        any(condition and condition in message for condition in required)
+        or (expected and expected in message)
+        for message in messages
+    )
+    negative = any(
+        any(condition and condition in message for condition in forbidden)
+        for message in messages
+    )
+    return positive and negative
+
+
+def assess_evidence(record: Any, task_specification: Any, oracle: Any) -> EvidenceAssessment:
+    """Explicit evidence sufficiency, independent of any judge confidence.
+
+    INSUFFICIENT / AMBIGUOUS are hard gates: the judge may not output a
+    confident PASS/FAIL from missing or contradictory evidence. PARTIAL
+    context is only insufficient when the oracle's required evidence is
+    actually absent.
+    """
+    reasons: list[str] = []
+    missing: list[str] = []
+    provenance = tuple(_get(record, "context_provenance", ()) or ())
+    final_messages = _final_messages(record)
+    tools = _get(record, "tools", None)
+    results = _get(record, "tool_results", None)
+
+    if _truncated(record):
+        missing.append("TRAJECTORY_TRUNCATED")
+        reasons.append("trajectory is truncated; outcome cannot be verified")
+    if not provenance:
+        missing.append("CONTEXT")
+        reasons.append("context provenance missing; judge cannot verify agent-visible context")
+    for kind in tuple(_get(oracle, "required_evidence", ()) or ()):
+        kind = str(kind)
+        if kind == "FINAL_MESSAGE" and not final_messages:
+            missing.append(kind)
+            reasons.append(f"oracle required evidence {kind} missing")
+        elif kind == "TOOL_CALLS" and tools is None:
+            missing.append(kind)
+            reasons.append(f"oracle required evidence {kind} missing")
+        elif kind == "TOOL_RESULTS" and results is None:
+            missing.append(kind)
+            reasons.append(f"oracle required evidence {kind} missing")
+        elif kind == "CONTEXT" and not provenance:
+            missing.append(kind)
+            reasons.append(f"oracle required evidence {kind} missing")
+        elif kind in _missing_semantics(record):
+            missing.append(kind)
+            reasons.append(f"oracle required evidence {kind} missing from PARTIAL context")
+    if (
+        _get(oracle, "expected_answer")
+        or _get(oracle, "required_conditions")
+        or _get(oracle, "expected_business_outcome")
+    ) and not final_messages:
+        missing.append("FINAL_MESSAGE")
+        reasons.append("no final assistant message in record; output semantics cannot be judged")
+
+    cares_about_tools = bool(
+        _get(oracle, "required_tools")
+        or _get(oracle, "tool_call_constraints")
+        or _get(oracle, "max_calls") is not None
+        or _get(oracle, "side_effect_constraints")
+        or _get(task_specification, "required_tools")
+        or _get(task_specification, "forbidden_tools")
+    )
+    if cares_about_tools and tools is None:
+        missing.append("TOOL_CALLS")
+        reasons.append("tool calls not in ExecutionRecord; behavioral facts cannot be verified")
+    elif cares_about_tools and results is None:
+        missing.append("TOOL_RESULTS")
+        reasons.append("tool results not in ExecutionRecord; behavioral facts cannot be verified")
+    elif cares_about_tools:
+        unresolved = _unresolved_calls(record)
+        if unresolved:
+            missing.append("TOOL_RESULT")
+            reasons.append(f"{len(unresolved)} tool call(s) have no tool result")
+    if _get(oracle, "side_effect_constraints") and _get(record, "side_effects", None) is None:
+        missing.append("SIDE_EFFECTS")
+        reasons.append("side_effect evidence not in ExecutionRecord")
+
+    if _has_lossy_evidence(record):
+        return EvidenceAssessment(
+            AMBIGUOUS,
+            tuple(reasons or ["LOSSY backend evidence present; semantic judgment cannot be EXACT"]),
+            tuple(sorted(set(missing))),
+        )
+    if _conflicting_final_messages(record, oracle):
+        return EvidenceAssessment(
+            AMBIGUOUS,
+            tuple(reasons + ["final messages conflict on oracle conditions; evidence is ambiguous"]),
+            tuple(sorted(set(missing))),
+        )
+    if missing:
+        return EvidenceAssessment(INSUFFICIENT, tuple(reasons), tuple(sorted(set(missing))))
+    return EvidenceAssessment(SUFFICIENT, tuple(reasons), ())
+
+
+def _oracle_finding(
+    rule_id: str,
+    status: str,
+    message: str,
+    oracle_id: Any,
+    execution_id: Any,
+) -> Finding:
+    refs = (
+        {
+            "execution_id": execution_id,
+            "oracle_id": oracle_id,
+            "rule_id": rule_id,
+        },
+    )
+    return Finding(rule_id, status, {"PASS": "info", "INCONCLUSIVE": "warning", "FAIL": "error"}[status], message, refs)
+
+
+def check_behavioral(
+    record: Any,
+    task_specification: Any,
+    oracle: Any,
+) -> tuple[Finding, ...]:
+    """Deterministic oracle checks: verifiable behavioral facts only.
+
+    Checks oracle-declared facts (required/forbidden tools, order, call
+    counts/arguments, side effects). Existing TaskSpecification rules keep
+    living in ``rules.py``; this layer adds what the task spec cannot
+    express. Observable absence (record complete, call never happened) is
+    FAIL; missing record fields are INCONCLUSIVE.
+    """
+    findings: list[Finding] = []
+    tools = _get(record, "tools", None)
+    execution_id = _get(record, "execution_id")
+    oracle_id = _get(oracle, "oracle_id")
+
+    required = tuple(_get(oracle, "required_tools", ()) or ())
+    forbidden = tuple(_get(oracle, "forbidden_tools", ()) or ())
+    if required:
+        if tools is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-01", INCONCLUSIVE,
+                    "tool calls not in ExecutionRecord; required oracle tools cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            called = {_get(call, "name") for call in tools}
+            missing = [name for name in required if name not in called]
+            if missing:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-01", FAIL,
+                        "required oracle tools not called: " + ", ".join(missing),
+                        oracle_id, execution_id,
+                    ),
+                )
+            else:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-01", PASS,
+                        "all required oracle tools called",
+                        oracle_id, execution_id,
+                    ),
+                )
+    if forbidden:
+        if tools is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-02", INCONCLUSIVE,
+                    "tool calls not in ExecutionRecord; forbidden oracle tools cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            hits = [call for call in tools if _get(call, "name") in forbidden]
+            if hits:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-02", FAIL,
+                        "forbidden oracle tool called: "
+                        + ", ".join(_get(call, "name") for call in hits),
+                        oracle_id, execution_id,
+                    ),
+                )
+            else:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-02", PASS,
+                        "no forbidden oracle tool called",
+                        oracle_id, execution_id,
+                    ),
+                )
+
+    order = tuple(_get(oracle, "required_order", ()) or ())
+    if len(order) >= 2:
+        if tools is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-03", INCONCLUSIVE,
+                    "tool calls not in ExecutionRecord; required tool order cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            names = [_get(call, "name") for call in tools]
+            positions = [
+                next((i for i, name in enumerate(names) if name == expected), None)
+                for expected in order
+            ]
+            # ponytail: first-occurrence order check; upgrade to call-granular
+            # sequence matching if repeated-tool order ever matters.
+            if all(position is not None for position in positions) and positions != sorted(positions):
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-03", FAIL,
+                        "tools called out of required order: " + " -> ".join(order),
+                        oracle_id, execution_id,
+                    ),
+                )
+            else:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-03", PASS,
+                        "required tool order satisfied",
+                        oracle_id, execution_id,
+                    ),
+                )
+
+    forbidden_order = tuple(_get(oracle, "forbidden_order", ()) or ())
+    if len(forbidden_order) >= 2:
+        if tools is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-04", INCONCLUSIVE,
+                    "tool calls not in ExecutionRecord; forbidden tool order cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            positions = {
+                name: next(
+                    (i for i, call in enumerate(tools) if _get(call, "name") == name),
+                    None,
+                )
+                for name in set(forbidden_order)
+            }
+            bad = [
+                (left, right)
+                for left, right in zip(forbidden_order, forbidden_order[1:])
+                if positions.get(left) is not None
+                and positions.get(right) is not None
+                and positions[left] < positions[right]
+            ]
+            if bad:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-04", FAIL,
+                        "forbidden tool order observed: "
+                        + "; ".join(f"{left} before {right}" for left, right in bad),
+                        oracle_id, execution_id,
+                    ),
+                )
+            else:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-04", PASS,
+                        "no forbidden tool order observed",
+                        oracle_id, execution_id,
+                    ),
+                )
+
+    max_calls = _get(oracle, "max_calls")
+    if max_calls is not None:
+        if tools is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-05", INCONCLUSIVE,
+                    "tool calls not in ExecutionRecord; max_calls cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+        elif len(tools) > int(max_calls):
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-05", FAIL,
+                    f"{len(tools)} tool calls exceed oracle max_calls={max_calls}",
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-05", PASS,
+                    "tool call count within oracle max_calls",
+                    oracle_id, execution_id,
+                ),
+            )
+
+    for constraint in tuple(_get(oracle, "tool_call_constraints", ()) or ()):
+        tool = _get(constraint, "tool")
+        if tools is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-06", INCONCLUSIVE,
+                    "tool calls not in ExecutionRecord; tool call constraints cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+            continue
+        calls = [call for call in tools if _get(call, "name") == tool]
+        min_calls = _get(constraint, "min_calls")
+        max_calls = _get(constraint, "max_calls")
+        required_arguments = _get(constraint, "required_arguments")
+        forbidden_arguments = _get(constraint, "forbidden_arguments")
+        violations: list[str] = []
+        if min_calls is not None and len(calls) < int(min_calls):
+            violations.append(f"{tool} called {len(calls)} time(s), min_calls={min_calls}")
+        if max_calls is not None and len(calls) > int(max_calls):
+            violations.append(f"{tool} called {len(calls)} time(s), max_calls={max_calls}")
+        if required_arguments is not None and not calls:
+            violations.append(f"required tool call {tool!r} missing")
+        for call in calls:
+            arguments = _get(call, "arguments", {}) or {}
+            for key, value in (required_arguments or {}).items():
+                if _get(arguments, key) != value:
+                    violations.append(f"{tool}({key}={value!r}) not satisfied")
+            if forbidden_arguments and all(
+                _get(arguments, key) == value
+                for key, value in forbidden_arguments.items()
+            ):
+                violations.append(f"{tool} has forbidden argument(s) {forbidden_arguments!r}")
+        if violations:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-06", FAIL,
+                    "; ".join(violations),
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-06", PASS,
+                    f"tool call constraint satisfied for {tool!r}",
+                    oracle_id, execution_id,
+                ),
+            )
+
+    side_effect_constraints = tuple(_get(oracle, "side_effect_constraints", ()) or ())
+    if side_effect_constraints:
+        side_effects = _get(record, "side_effects", None)
+        if side_effects is None:
+            findings.append(
+                _oracle_finding(
+                    "ORACLE-07", INCONCLUSIVE,
+                    "side_effect evidence not in ExecutionRecord; side effects cannot be verified",
+                    oracle_id, execution_id,
+                ),
+            )
+        else:
+            hits = [
+                side_effect
+                for side_effect in side_effects
+                if any(token in str(side_effect) for token in side_effect_constraints)
+            ]
+            if hits:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-07", FAIL,
+                        "forbidden side effect observed: " + str(hits),
+                        oracle_id, execution_id,
+                    ),
+                )
+            else:
+                findings.append(
+                    _oracle_finding(
+                        "ORACLE-07", PASS,
+                        "no forbidden side effect observed",
+                        oracle_id, execution_id,
+                    ),
+                )
+    return tuple(findings)
+
+
 def _default_evidence(jinput: LLMJudgeInput, criterion_id: str) -> tuple[dict, ...]:
     record = jinput.execution_record
     ref = {
@@ -388,20 +854,31 @@ def fake_judge(
     """Deterministic fake judge: rubric criteria + guards, no LLM, no network."""
     rubric = jinput.rubric
     record = jinput.execution_record
-    provenance = _context_provenance(record)
-    lossy = _has_lossy_evidence(record)
+    assessment = assess_evidence(record, jinput.task_specification, jinput.oracle_reference)
+    behavioral = check_behavioral(record, jinput.task_specification, jinput.oracle_reference)
     forced: str | None = None
     forced_message = ""
-    if not provenance:
+    forced_behavioral: tuple[Finding, ...] = ()
+    if assessment.verdict != SUFFICIENT:
         forced = INCONCLUSIVE
-        forced_message = (
-            "context provenance missing; judge cannot verify agent-visible context"
+        forced_message = f"evidence {assessment.verdict}: " + "; ".join(
+            assessment.reasons or ("insufficient evidence",)
         )
-    elif lossy:
-        forced = INCONCLUSIVE
-        forced_message = (
-            "LOSSY backend evidence present; semantic judgment cannot be EXACT"
+    else:
+        behavioral_fail = tuple(finding for finding in behavioral if finding.status == FAIL)
+        behavioral_inconclusive = tuple(
+            finding for finding in behavioral if finding.status == INCONCLUSIVE
         )
+        if behavioral_fail:
+            forced = FAIL
+            forced_message = "; ".join(finding.message for finding in behavioral_fail)
+            forced_behavioral = behavioral_fail
+        elif behavioral_inconclusive:
+            forced = INCONCLUSIVE
+            forced_message = "; ".join(
+                finding.message for finding in behavioral_inconclusive
+            )
+            forced_behavioral = behavioral_inconclusive
 
     findings: list[JudgeFinding] = []
     for criterion in rubric.criteria:
@@ -442,8 +919,14 @@ def fake_judge(
             ),
         )
 
+    findings.extend(
+        JudgeFinding(finding.rule_id, finding.status, finding.message, finding.evidence_refs)
+        for finding in forced_behavioral
+    )
     status = forced or _overall_status(tuple(findings))
-    if confidence is None:
+    if forced:
+        confidence = LOW if status == INCONCLUSIVE else (confidence or HIGH)
+    elif confidence is None:
         confidence = LOW if status == INCONCLUSIVE else HIGH
     if score is None:
         score = None if status == INCONCLUSIVE else 1.0 if status == PASS else 0.0
@@ -730,11 +1213,14 @@ GOLDEN_JUDGE_TASKS = (
 )
 
 __all__ = [
+    "AMBIGUOUS",
+    "EvidenceAssessment",
     "FAIL",
     "GOLDEN_JUDGE_TASKS",
     "GOLDEN_RUBRIC",
     "HIGH",
     "INCONCLUSIVE",
+    "INSUFFICIENT",
     "JUDGE_CONFLICT",
     "JudgeCriterion",
     "JudgeFinding",
@@ -747,6 +1233,7 @@ __all__ = [
     "MEDIUM",
     "OracleReference",
     "PASS",
+    "SUFFICIENT",
     "SUPPORTED",
     "TASK_JUDGE_01",
     "TASK_JUDGE_01_RECORD",
@@ -757,8 +1244,11 @@ __all__ = [
     "TASK_JUDGE_04",
     "TASK_JUDGE_04_RECORD",
     "TASK_JUDGE_ORACLE",
+    "ToolCallConstraint",
     "UNSUPPORTED",
     "UnifiedEvaluationResult",
     "aggregate",
+    "assess_evidence",
+    "check_behavioral",
     "fake_judge",
 ]

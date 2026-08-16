@@ -26,7 +26,7 @@ from events import (
     TURN_START,
     SessionEvent,
 )
-from extensions import ABORTED, RUNNING, utc_now
+from extensions import ABORTED, FAILED, RUNNING, SUCCEEDED, utc_now
 from runtime import RuntimeCoordinator
 from tool_runtime import ToolCall, ToolRuntime
 from turn_step import Session, Step, Turn
@@ -119,6 +119,15 @@ class ExecutionRecord:
     events: tuple[tuple[int, str], ...]
     backend_refs: tuple[dict, ...]
     context_provenance: tuple[dict, ...]
+    turns: tuple[dict, ...] = ()
+    steps: tuple[dict, ...] = ()
+    tool_results: tuple[dict, ...] = ()
+    unresolved_tools: tuple[dict, ...] = ()
+    execution_outcome: dict | None = None
+    turn_end_reason: str | None = None
+    turn_outcome: str | None = None
+    replay_ref: dict | None = None
+    lossiness: tuple[dict, ...] = ()
 
 
 @dataclass
@@ -457,11 +466,67 @@ def _unique_dicts(values) -> tuple[dict, ...]:
     return tuple(out)
 
 
+def _turn_outcome_from_reason(reason: str | None) -> str | None:
+    """Derived TurnRecord outcome; only from the persisted turn/end reason."""
+    if reason is None:
+        return None
+    return {
+        "completed": "COMPLETED",
+        "interrupted": "ABORTED",
+        "aborted": "ABORTED",
+        "blocked": "ABORTED",
+        "error": "FAILED",
+        "max-tokens": "PARTIAL",
+    }.get(reason, "UNKNOWN")
+
+
+def _step_outcome(
+    final_status: str | None,
+    has_step_end: bool,
+    turn_end_reason: str | None,
+) -> str:
+    """Derive one StepRecord.outcome from persisted attempt/step/turn facts."""
+    if final_status == FAILED:
+        return FAILED
+    if final_status == ABORTED:
+        return ABORTED
+    if not has_step_end:
+        if turn_end_reason in ("interrupted", "aborted"):
+            return ABORTED
+        return "UNKNOWN"
+    if final_status == RUNNING:
+        return "UNKNOWN"
+    return "COMPLETED"
+
+
+def _execution_outcome(
+    attempts: tuple[ReplayAttempt, ...],
+    turn_end_reason: str | None,
+) -> dict:
+    """Execution outcome is DERIVED: no execution-level source event exists."""
+    if not attempts:
+        return {"status": "UNKNOWN", "derived": True, "basis": ["no attempts"]}
+    final = max(attempts, key=lambda attempt: attempt.attempt_number)
+    status = {
+        SUCCEEDED: "SUCCESS",
+        FAILED: FAILED,
+        ABORTED: ABORTED,
+    }.get(final.status, "UNKNOWN")
+    basis = [f"{attempt.attempt_id}:{attempt.status}" for attempt in attempts]
+    if turn_end_reason is not None:
+        basis.append(f"turn/end:{turn_end_reason}")
+    return {"status": status, "derived": True, "basis": basis}
+
+
 def build_execution_record(
     store: EventStore,
     execution_id: str,
 ) -> ExecutionRecord:
-    """Immutable per-execution projection of durable evidence (5-H)."""
+    """Immutable per-execution projection of durable evidence (5-J).
+
+    Turns/steps/tools/results are projected from the same append-only log;
+    every derived outcome is explicitly marked derived, never persisted fact.
+    """
     history = replay(store)
     attempts = next(
         (
@@ -477,20 +542,207 @@ def build_execution_record(
         for event in store.events()
         if event.step_id in step_ids
     ]
-    tools = tuple(
-        dict(event.payload)
-        for event in scoped
+    turn_ids = {event.turn_id for event in scoped if event.turn_id}
+    include_seqs = {event.seq for event in scoped}
+    include_seqs.update(
+        event.seq
+        for event in store.events()
+        if event.event_type in (TURN_START, TURN_END)
+        and event.turn_id in turn_ids
+    )
+    included = [
+        event
+        for event in store.events()
+        if event.seq in include_seqs
+    ]
+
+    turn_id = next(iter(turn_ids), None)
+    turn_start = next(
+        (
+            event
+            for event in included
+            if event.event_type == TURN_START
+        ),
+        None,
+    )
+    turn_end = next(
+        (
+            event
+            for event in included
+            if event.event_type == TURN_END
+        ),
+        None,
+    )
+    turn_end_reason = (
+        turn_end.payload.get("reason") if turn_end is not None else None
+    )
+    turn_outcome = _turn_outcome_from_reason(turn_end_reason)
+    turns = (
+        (
+            {
+                "turn_id": turn_id,
+                "end_reason": turn_end_reason,
+                "outcome": turn_outcome,
+                "derived": True,
+                "event_refs": tuple(
+                    event.seq
+                    for event in (turn_start, turn_end)
+                    if event is not None
+                ),
+            },
+        )
+        if turn_id is not None
+        else ()
+    )
+
+    step_order: list[str] = []
+    for event in scoped:
+        if event.step_id is not None and event.step_id not in step_order:
+            step_order.append(event.step_id)
+    steps = []
+    for step_id in step_order:
+        step_attempts = [
+            attempt
+            for attempt in attempts
+            if attempt.step_id == step_id
+        ]
+        step_start = next(
+            (
+                event
+                for event in included
+                if event.event_type == STEP_START
+                and event.step_id == step_id
+            ),
+            None,
+        )
+        step_end = next(
+            (
+                event
+                for event in included
+                if event.event_type == STEP_END
+                and event.step_id == step_id
+            ),
+            None,
+        )
+        final = (
+            max(step_attempts, key=lambda attempt: attempt.attempt_number)
+            if step_attempts
+            else None
+        )
+        derived_from = []
+        if step_attempts:
+            derived_from.append("attempt_status")
+        if step_end is not None:
+            derived_from.append("step/end")
+        if turn_end_reason is not None:
+            derived_from.append("turn/end")
+        steps.append(
+            {
+                "step_id": step_id,
+                "turn_id": turn_id,
+                "outcome": _step_outcome(
+                    final.status if final is not None else None,
+                    step_end is not None,
+                    turn_end_reason,
+                ),
+                "derived": True,
+                "derived_from": tuple(derived_from),
+                "attempt_ids": tuple(
+                    attempt.attempt_id for attempt in step_attempts
+                ),
+                "event_refs": tuple(
+                    event.seq
+                    for event in (step_start, step_end)
+                    if event is not None
+                ),
+            },
+        )
+
+    active_attempt: dict[int, str | None] = {}
+    current: str | None = None
+    for event in included:
+        if (
+            event.event_type == EXECUTION_ATTEMPT_START
+            and event.payload.get("execution_id") == execution_id
+        ):
+            current = event.payload.get("attempt_id")
+        elif (
+            event.event_type == EXECUTION_ATTEMPT_END
+            and event.payload.get("attempt_id") == current
+        ):
+            current = None
+        active_attempt[event.seq] = current
+
+    call_events = [
+        event
+        for event in included
         if event.event_type == TOOL_CALL
+    ]
+    result_events = [
+        event
+        for event in included
+        if event.event_type == TOOL_RESULT
+    ]
+    calls_by_id = {
+        event.payload.get("call_id"): event
+        for event in call_events
+    }
+    results_by_id = {
+        event.payload.get("tool_call_id"): event
+        for event in result_events
+    }
+    tools = tuple(
+        {
+            **dict(event.payload),
+            "seq": event.seq,
+            "turn_id": event.turn_id,
+            "step_id": event.step_id,
+            "execution_id": execution_id,
+            "attempt_id": active_attempt.get(event.seq),
+        }
+        for event in call_events
+    )
+    tool_results = tuple(
+        {
+            **dict(event.payload),
+            "call_id": event.payload.get("tool_call_id"),
+            "seq": event.seq,
+            "source_event_seqs": tuple(event.source_event_seqs),
+            "turn_id": event.turn_id,
+            "step_id": event.step_id,
+            "execution_id": execution_id,
+            "attempt_id": active_attempt.get(event.seq)
+            or (
+                active_attempt.get(calls_by_id[event.payload["tool_call_id"]].seq)
+                if event.payload.get("tool_call_id") in calls_by_id
+                else None
+            ),
+        }
+        for event in result_events
+    )
+    unresolved_tools = tuple(
+        {
+            "call_id": event.payload.get("call_id"),
+            "name": event.payload.get("name"),
+            "status": TOOL_OUTCOME_UNKNOWN,
+            "seq": event.seq,
+            "turn_id": event.turn_id,
+            "step_id": event.step_id,
+            "execution_id": execution_id,
+            "attempt_id": active_attempt.get(event.seq),
+        }
+        for event in call_events
+        if event.payload.get("call_id") not in results_by_id
     )
     owner_refs = _unique_dicts(
         event.payload["owner_ref"]
-        for event in scoped
-        if event.event_type == TOOL_CALL
+        for event in included
+        if event.event_type in (TOOL_CALL, TOOL_RESULT)
         and "owner_ref" in event.payload
     )
     backend_refs = _unique_dicts(
         event.payload["backend_event_ref"]
-        for event in scoped
+        for event in included
         if "backend_event_ref" in event.payload
     )
     context_provenance = tuple(
@@ -498,9 +750,34 @@ def build_execution_record(
         for attempt in attempts
         if attempt.context_provenance is not None
     )
+    lossiness = _unique_dicts(
+        [
+            attempt.backend_metadata
+            for attempt in attempts
+            if attempt.backend_metadata is not None
+        ]
+        + [
+            event.payload["backend_metadata"]
+            for event in included
+            if "backend_metadata" in event.payload
+        ]
+    )
+    event_range = (
+        [included[0].seq, included[-1].seq]
+        if included
+        else []
+    )
+    replay_ref = {
+        "source": "event_log",
+        "session_id": store.session_id,
+        "execution_id": execution_id,
+        "event_range": event_range,
+        "record_version": "5j.1",
+        "projection_rule_version": "v2",
+    }
     return ExecutionRecord(
-        record_version="5h.1",
-        projection_rule_version="v1",
+        record_version="5j.1",
+        projection_rule_version="v2",
         execution_id=execution_id,
         session_id=store.session_id,
         initiator_ref=(
@@ -511,9 +788,18 @@ def build_execution_record(
         owner_refs=owner_refs,
         attempts=attempts,
         tools=tools,
-        events=tuple((event.seq, event.event_type) for event in scoped),
+        events=tuple((event.seq, event.event_type) for event in included),
         backend_refs=backend_refs,
         context_provenance=context_provenance,
+        turns=turns,
+        steps=tuple(steps),
+        tool_results=tool_results,
+        unresolved_tools=unresolved_tools,
+        execution_outcome=_execution_outcome(attempts, turn_end_reason),
+        turn_end_reason=turn_end_reason,
+        turn_outcome=turn_outcome,
+        replay_ref=replay_ref,
+        lossiness=lossiness,
     )
 
 

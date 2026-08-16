@@ -319,7 +319,7 @@ class Phase5HDurableInitiatorTests(unittest.IsolatedAsyncioTestCase):
 
         record = build_execution_record(session.store, execution_id)
 
-        self.assertEqual(record.record_version, "5h.1")
+        self.assertEqual(record.record_version, "5j.1")
         self.assertEqual(record.execution_id, execution_id)
         self.assertEqual(record.initiator_ref["ref"], "agent-a")
         self.assertEqual(

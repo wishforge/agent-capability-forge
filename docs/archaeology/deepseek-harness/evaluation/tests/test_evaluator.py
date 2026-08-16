@@ -350,7 +350,9 @@ class BackendFixtureTests(unittest.IsolatedAsyncioTestCase):
     async def test_agent_scope_fixture(self) -> None:
         record = await run_agentscope()
         result = evaluate(record, self.CROSS_SPEC)
-        self.assertEqual(result.status, INCONCLUSIVE)
+        # Phase 5-J: tool results / turn outcome / replay_ref are now
+        # projected, so the previously-inconclusive rules resolve.
+        self.assertEqual(result.status, PASS)
         self.assertTrue(all(f.evidence_refs for f in result.findings))
         self.assertEqual(finding_map(result)["RULE-11"].status, PASS)
         self.assertEqual(finding_map(result)["RULE-13"].status, PASS)
@@ -358,7 +360,7 @@ class BackendFixtureTests(unittest.IsolatedAsyncioTestCase):
     async def test_codex_fixture(self) -> None:
         record = await run_codex()
         result = evaluate(record, self.CROSS_SPEC)
-        self.assertEqual(result.status, INCONCLUSIVE)
+        self.assertEqual(result.status, PASS)
         self.assertTrue(all(f.evidence_refs for f in result.findings))
         self.assertEqual(finding_map(result)["RULE-11"].status, PASS)
         self.assertEqual(finding_map(result)["RULE-13"].status, PASS)

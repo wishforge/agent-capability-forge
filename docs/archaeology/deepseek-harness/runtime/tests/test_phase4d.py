@@ -58,7 +58,7 @@ from initiator import (  # noqa: E402
     current_initiator,
     require_initiator,
 )
-from model_adapter import AgentScopeModelAdapter  # noqa: E402
+from backend.adapters.agentscope import AgentScopeModelAdapter  # noqa: E402
 from recovery import rebuild_session, replay  # noqa: E402
 from runtime import AgentRuntime  # noqa: E402
 from surface import SurfaceProjection  # noqa: E402

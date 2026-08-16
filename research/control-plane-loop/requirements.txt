@@ -1,0 +1,5 @@
+# Verified 2026-08-16 with Python 3.13.9 (system python3; project .venv lacks pip/pytest).
+# These are the exact versions used for the 30-test control-plane-loop regression run.
+pytest==9.0.2
+requests==2.34.2
+openai==2.45.0

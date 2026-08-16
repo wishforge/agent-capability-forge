@@ -240,3 +240,13 @@ python3 docs/archaeology/deepseek-harness/evaluation/calibration.py \
   --dataset 6d --prompt C \
   --persist docs/archaeology/deepseek-harness/evaluation/artifacts/phase6d-calibration-runs-C.jsonl
 ```
+
+## 13. Phase 6-D.2 reproducibility pointer
+
+§11 中 `control-plane-loop regression 不受影响（30 passed）` 是 2026-08-16
+working tree 中的历史观察。当时 `research/control-plane-loop/` 尚未纳入 Git，
+`bf91ca6` 的 clean checkout 无法发现或运行这 30 个测试，因此该结果最初
+**不可**从 Git checkpoint 复现。Phase 6-D.2
+（`43-phase6d2-reproducibility-report.md`）将测试源、最小依赖声明与结果
+artifact 纳入版本控制，并建立可复现 checkpoint（commit subject:
+`chore(evaluation): make control-plane regression reproducible`）。

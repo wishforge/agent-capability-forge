@@ -1,0 +1,154 @@
+# 43 — Phase 6-D.2 Reproducibility Report: Control-Plane Regression Evidence Provenance
+
+> Phase: Phase 6-D.2. Parents: Phase 6-D (`bf91ca6`), Phase 6-D.1 (`bdba660`).
+> Scope: version the existing `research/control-plane-loop` regression surface so the
+> 30-test evidence is reproducible from a Git checkpoint. No production runtime,
+> EventStore, or evaluation semantics are changed; no Condition-level
+> SATISFIED / VIOLATED / UNKNOWN implementation is added.
+> Executed: 2026-08-16, verified with system `python3` (3.13.9).
+
+## 1. Problem
+
+The 30 control-plane regression tests (S7.2/S7.3: `test_evaluation_result.py` 20 +
+`test_gate_calibration.py` 10) passed in the working tree but existed in no Git
+checkpoint. A clean clone could not discover or run them, so the historical
+“30 passed” evidence was not reproducible from Git.
+
+## 2. Why bf91ca6 was NOT reproducible
+
+- `git log --all -- research/control-plane-loop` → empty
+- `git ls-tree -r bf91ca6 -- research/control-plane-loop` → empty
+- All 11 Python files under `research/control-plane-loop/` were untracked at
+  `bf91ca6` (and at `bdba660`), so a clean checkout of those commits contains no
+  test source at all.
+
+## 3. Original working-tree evidence
+
+- Interpreter: system `python3` 3.13.9
+- `python3 -m pytest research/control-plane-loop -q` → `30 passed in 1.33s`
+- `python3 -m unittest discover -s . -p 'test_*.py' -v` → `Ran 30 tests` / `OK`
+  (the audit command)
+- `research/control-plane-loop/.venv` exists but has no `pip`/`pytest`, so the
+  project-local venv could not run the suite; system `python3` was the verified
+  interpreter.
+
+## 4. Exact test sources
+
+All 11 existing `.py` files in `research/control-plane-loop/` are now versioned.
+
+Tests (30):
+
+- `test_evaluation_result.py` — 20 tests
+  (`TestJudgeClassification` 4, `TestJudgeEvidence` 3, `TestL0` 4,
+  `TestAggregation` 2, `TestRuns` 4, `TestCompare` 3)
+- `test_gate_calibration.py` — 10 tests (`TestGateSemantics`)
+
+Imported support modules required by the tests:
+
+- `evaluation_result.py` (imports `noise_attribution`)
+- `gate_calibration.py` (imports `evaluation_result`, `noise_attribution`)
+- `noise_attribution.py` (stdlib-only at module level)
+
+Auxiliary scripts versioned with the suite but NOT imported by the 30 tests:
+
+- `build_dataset.py`, `evaluate.py`, `loop.py`, `optimize.py`, `promote.py`,
+  `run_s72_experiments.py`
+
+## 5. Dependency provenance
+
+Only third-party modules reachable at import time by the 30 tests:
+
+- `requests` (unconditional module-level import in `gate_calibration.py`)
+- `openai` (unconditional module-level import in `gate_calibration.py`)
+- `pytest` (test runner)
+
+Verified exact versions (pinned in
+`research/control-plane-loop/requirements.txt`):
+
+| Package | Version | Verified |
+| --- | --- | --- |
+| Python | 3.13.9 | yes (system `python3` + fresh venv) |
+| pytest | 9.0.2 | yes |
+| requests | 2.34.2 | yes |
+| openai | 2.45.0 | yes |
+
+The auxiliary scripts import `dspy`, `agentevals`, and `openevals`; those are not
+required by the 30 tests and are intentionally not declared (see Remaining gaps).
+
+## 6. Git provenance
+
+- Before: the 11 `.py` files were untracked; `.gitignore` already carried the
+  intentionally preserved rules ignoring `research/control-plane-loop/data/` and
+  `research/control-plane-loop/.venv/`.
+- Now: one focused commit `chore(evaluation): make control-plane regression
+  reproducible` (parent `bdba660`) versions the 11 `.py` files,
+  `requirements.txt`, the `.gitignore` rules, this report, and the result
+  artifact. `data/`, `.venv/`, and `__pycache__/` remain ignored.
+- A commit cannot self-reference its own hash; the exact checkpoint hash is
+  recorded in the phase handoff and can be retrieved with:
+  `git log -1 --format='%H' --grep='chore(evaluation): make control-plane regression reproducible'`
+
+## 7. Clean-checkout procedure
+
+```text
+git worktree add --detach /tmp/phase6d2-clean <checkpoint>
+python3 -m venv /tmp/phase6d2-clean-venv
+/tmp/phase6d2-clean-venv/bin/python -m pip install -r /tmp/phase6d2-clean/research/control-plane-loop/requirements.txt
+cd /tmp/phase6d2-clean
+/tmp/phase6d2-clean-venv/bin/python -m pytest research/control-plane-loop -q --junitxml=/tmp/phase6d2-clean-result.xml
+```
+
+## 8. Clean-checkout result
+
+From the checkpoint commit (test-source tree), fresh venv, pinned dependencies:
+
+```text
+30 passed in 5.95s
+```
+
+JUnit XML (`/tmp/phase6d2-clean-result.xml`, local only):
+
+```text
+tests=30 errors=0 failures=0 skipped=0
+timestamp=2026-08-16T18:27:50+08:00
+Python 3.13.9
+```
+
+The final commit adds only documentation/artifact files (identical test sources
+and `requirements.txt`); the suite was re-run from the final commit and again
+passed 30/30.
+
+## 9. Artifact provenance
+
+- Committed concise artifact:
+  `docs/archaeology/unified-runtime/evaluation/artifacts/43-phase6d2-clean-checkout.txt`
+- Local machine-readable JUnit XML: `/tmp/phase6d2-clean-result.xml` (kept local
+  because it is hostname/timestamp-specific; regenerated by the procedure above).
+- The artifact records suite, test count, pass/fail, timestamp, Python runtime,
+  and checkpoint identification. No secrets or credentials are included.
+
+## 10. Remaining gaps
+
+- `research/control-plane-loop/.venv` has no `pip`/`pytest`; reproduction needs a
+  fresh venv (or a Python with pytest) plus `requirements.txt`.
+- Dependencies of the auxiliary scripts (`dspy`, `agentevals`, `openevals`) are
+  undeclared; they are not exercised by the 30 tests.
+- Report 41's “188 passed / 3 skipped” evaluation baseline is a unittest count;
+  pytest reports 187 passed / 11 skipped for the same offline environment (skip
+  accounting differs). This checkpoint covers only the control-plane-loop 30.
+- The committed artifact's timestamp is inherently environment-specific; the
+  test result itself is deterministic (same code + pinned deps → 30 passed).
+
+## 11. Exact new checkpoint commit
+
+```text
+subject: chore(evaluation): make control-plane regression reproducible
+parent:  bdba660ce35281a3a7e8eefe72d5ecb02e12876e (Phase 6-D.1)
+hash:    recorded in the phase handoff (see retrieval command in §6)
+```
+
+## Final verdict
+
+COMPLETE: test source versioned; dependencies declared; clean checkout discovers
+and passes 30/30; provenance documented; no production runtime or evaluation
+semantics changed; unrelated archaeology files remain excluded.

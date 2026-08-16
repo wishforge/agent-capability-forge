@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 pilot/state/
+research/control-plane-loop/data/
+research/control-plane-loop/.venv/

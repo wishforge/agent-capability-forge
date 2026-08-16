@@ -1,0 +1,12 @@
+Phase 6-D.2 reproducibility artifact - control-plane regression
+
+Checkpoint: commit "chore(evaluation): make control-plane regression reproducible"
+            (parent bdba660); exact hash recorded in the phase handoff
+Suite:      research/control-plane-loop (S7.2/S7.3 regression, 20 + 10 tests)
+Command:    python -m pytest research/control-plane-loop -q
+Result:     30 passed, 0 failed, 0 skipped, 0 errors
+Timestamp:  2026-08-16T18:27:50+08:00
+Python:     3.13.9 (fresh venv)
+Deps:       pytest 9.0.2, requests 2.34.2, openai 2.45.0 (requirements.txt)
+Env:        clean git worktree from checkpoint + fresh venv; test run is offline
+JUnit XML:  /tmp/phase6d2-clean-result.xml (local machine-readable copy)

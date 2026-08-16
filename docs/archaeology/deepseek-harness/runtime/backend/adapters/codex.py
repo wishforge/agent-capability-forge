@@ -13,9 +13,18 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from compaction import ModelContext
+from extensions import (
+    ADAPTER,
+    BACKEND_SPECIFIC,
+    EXACT,
+    LOSSY,
+    SYNTHETIC,
+    BackendEventRef,
+    BackendMetadata,
+)
 from model_adapter import (
     ModelChunk,
     ModelFinal,
@@ -24,11 +33,6 @@ from model_adapter import (
     ModelToolCallEvent,
 )
 from turn_step import ExecutionContext
-
-EXACT = "EXACT"
-ADAPTER = "ADAPTER"
-LOSSY = "LOSSY"
-BACKEND_SPECIFIC = "BACKEND_SPECIFIC"
 
 # Phase 5-A/5-B established lossiness contract (23 §2); all remain visible.
 MISSING_SEMANTICS = (
@@ -45,14 +49,11 @@ _OUTPUT_TYPES = {"function_call_output", "custom_tool_call_output"}
 
 
 @dataclass(frozen=True, slots=True)
-class BackendMappingMetadata:
+class BackendMappingMetadata(BackendMetadata):
     """Per-item translation metadata; never silently swallows lossiness."""
 
     backend: str = "codex"
-    mapping_quality: str = ADAPTER
     missing_semantics: tuple[str, ...] = MISSING_SEMANTICS
-    raw_event_ref: dict[str, Any] | None = None
-    source_event_type: str | None = None
 
 
 class CodexAdapter:
@@ -81,18 +82,26 @@ class CodexAdapter:
             ...,
         ] = ()
         self.mapping_metadata = BackendMappingMetadata(
-            raw_event_ref={
-                "rollout_path": str(self.rollout_path),
-                "line": None,
-            },
+            backend_event_ref=BackendEventRef(
+                backend="codex",
+                event_type="session_meta",
+                reference={
+                    "rollout_path": str(self.rollout_path),
+                    "line": None,
+                },
+            ),
             source_event_type="session_meta",
         )
         self.ownership_metadata = BackendMappingMetadata(
             mapping_quality=BACKEND_SPECIFIC,
-            raw_event_ref={
-                "rollout_path": str(self.rollout_path),
-                "line": None,
-            },
+            backend_event_ref=BackendEventRef(
+                backend="codex",
+                event_type="session_meta",
+                reference={
+                    "rollout_path": str(self.rollout_path),
+                    "line": None,
+                },
+            ),
             source_event_type="session_meta",
         )
         self.turn_metadata: BackendMappingMetadata | None = None
@@ -156,17 +165,18 @@ class CodexAdapter:
         for line_no, item_type, payload in records:
             if item_type == "session_meta":
                 if self.mapping_metadata.raw_event_ref.get("line") is None:
-                    ref = {
-                        "rollout_path": str(self.rollout_path),
-                        "line": line_no,
-                    }
+                    ref = _ref(
+                        self.rollout_path,
+                        line_no,
+                        event_type="session_meta",
+                    )
                     self.mapping_metadata = BackendMappingMetadata(
-                        raw_event_ref=ref,
+                        backend_event_ref=ref,
                         source_event_type="session_meta",
                     )
                     self.ownership_metadata = BackendMappingMetadata(
                         mapping_quality=BACKEND_SPECIFIC,
-                        raw_event_ref=ref,
+                        backend_event_ref=ref,
                         source_event_type="session_meta",
                     )
                 continue
@@ -188,7 +198,7 @@ class CodexAdapter:
             if rtype == "message":
                 if payload.get("role") == "assistant":
                     if current is not None:
-                        segments.append(current.events())
+                        segments.append(current.events(self.call_metadata))
                         step_refs.append(current.metadata)
                     current = _Segment(
                         self.rollout_path,
@@ -228,7 +238,12 @@ class CodexAdapter:
                 current.calls.append(_Call(call_id, name, arguments))
                 self.call_metadata[call_id] = BackendMappingMetadata(
                     mapping_quality=LOSSY,
-                    raw_event_ref=_ref(self.rollout_path, line_no),
+                    backend_event_ref=_ref(
+                        self.rollout_path,
+                        line_no,
+                        event_id=call_id,
+                        event_type=rtype,
+                    ),
                     source_event_type=rtype,
                 )
                 continue
@@ -237,7 +252,12 @@ class CodexAdapter:
                 if call_id in self.call_metadata:
                     self.call_metadata[call_id] = BackendMappingMetadata(
                         mapping_quality=EXACT,
-                        raw_event_ref=_ref(self.rollout_path, line_no),
+                        backend_event_ref=_ref(
+                            self.rollout_path,
+                            line_no,
+                            event_id=call_id,
+                            event_type=rtype,
+                        ),
                         source_event_type=rtype,
                     )
                 else:
@@ -245,7 +265,12 @@ class CodexAdapter:
                     self.call_metadata[f"output:{call_id}"] = (
                         BackendMappingMetadata(
                             mapping_quality=LOSSY,
-                            raw_event_ref=_ref(self.rollout_path, line_no),
+                            backend_event_ref=_ref(
+                                self.rollout_path,
+                                line_no,
+                                event_id=f"output:{call_id}",
+                                event_type=rtype,
+                            ),
                             source_event_type=rtype,
                         )
                     )
@@ -256,7 +281,7 @@ class CodexAdapter:
         if self._fatal_error is None and not turn_completed:
             raise ValueError("codex rollout has no task_complete event")
         if current is not None:
-            segments.append(current.events())
+            segments.append(current.events(self.call_metadata))
             step_refs.append(current.metadata)
         if not segments:
             raise ValueError("codex rollout has no assistant message")
@@ -276,22 +301,43 @@ class CodexAdapter:
         if ev_type == "task_started":
             self.turn_metadata = BackendMappingMetadata(
                 mapping_quality=ADAPTER,
-                raw_event_ref=_ref(self.rollout_path, line_no),
+                backend_event_ref=_ref(
+                    self.rollout_path,
+                    line_no,
+                    event_type="task_started",
+                ),
                 source_event_type="task_started",
             )
         elif ev_type == "error":
             self._fatal_error = (line_no, payload.get("message", "codex error"))
             self.error_metadata = BackendMappingMetadata(
                 mapping_quality=LOSSY,
-                raw_event_ref=_ref(self.rollout_path, line_no),
+                backend_event_ref=_ref(
+                    self.rollout_path,
+                    line_no,
+                    event_type="error",
+                ),
                 source_event_type="error",
             )
         # user_message / raw_response_item / exec_* are log-only projections;
         # ResponseItem is canonical and already translated above.
 
 
-def _ref(rollout_path: Path, line_no: int) -> dict[str, Any]:
-    return {"rollout_path": str(rollout_path), "line": line_no}
+def _ref(
+    rollout_path: Path,
+    line_no: int,
+    *,
+    event_id: str | None = None,
+    event_type: str | None = None,
+    quality: str = EXACT,
+) -> BackendEventRef:
+    return BackendEventRef(
+        backend="codex",
+        event_id=event_id,
+        event_type=event_type,
+        reference={"rollout_path": str(rollout_path), "line": line_no},
+        quality=quality,
+    )
 
 
 def _message_text(payload: dict) -> str:
@@ -337,25 +383,57 @@ class _Segment:
         self.calls: list[_Call] = []
         self.metadata = BackendMappingMetadata(
             mapping_quality=ADAPTER,
-            raw_event_ref=_ref(rollout_path, start_line),
+            backend_event_ref=_ref(
+                rollout_path,
+                start_line,
+                event_type=source_event_type,
+                quality=SYNTHETIC,
+            ),
             source_event_type=source_event_type,
         )
 
     def events(
         self,
+        call_metadata: dict[str, BackendMappingMetadata] | None = None,
     ) -> tuple[ModelChunk | ModelFinal | ModelToolCallEvent, ...]:
-        chunks = [ModelChunk(self.text)] if self.text else []
+        call_metadata = call_metadata or {}
+        ref = self.metadata.backend_event_ref
+        chunks = (
+            [
+                ModelChunk(
+                    self.text,
+                    backend_event_ref=ref,
+                    backend_metadata=self.metadata,
+                ),
+            ]
+            if self.text
+            else []
+        )
         calls = tuple(
             ModelToolCall(c.call_id, c.name, c.arguments)
             for c in self.calls
         )
+        call_events = tuple(
+            ModelToolCallEvent(
+                c.call_id,
+                c.name,
+                c.arguments,
+                backend_event_ref=(
+                    call_metadata.get(c.call_id, self.metadata).backend_event_ref
+                ),
+                backend_metadata=call_metadata.get(c.call_id, self.metadata),
+            )
+            for c in self.calls
+        )
         events: list[ModelChunk | ModelFinal | ModelToolCallEvent] = [
             *chunks,
-            ModelFinal(self.text, calls),
-            *(
-                ModelToolCallEvent(c.call_id, c.name, c.arguments)
-                for c in self.calls
+            ModelFinal(
+                self.text,
+                calls,
+                backend_event_ref=ref,
+                backend_metadata=self.metadata,
             ),
+            *call_events,
         ]
         return tuple(events)
 

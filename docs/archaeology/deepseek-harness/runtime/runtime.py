@@ -1,13 +1,15 @@
 """Phase 4-A/4-D RuntimeCoordinator + AgentRuntime: Session -> Turn -> Step loop.
 
 RuntimeCoordinator keeps the Phase 4-A constructor contract; AgentRuntime is
-the stream-driven loop that also runs AgentScope adapters, compaction retry,
+the stream-driven loop that also runs backend adapters, compaction retry,
 and tool delegation. Only internal scheduler/runtime failures may produce
 turn/end{error}; tool failures are ToolResult(is_error=True) and the loop
 continues (15 §11).
 """
 
 from __future__ import annotations
+
+from dataclasses import asdict, replace
 
 from model_adapter import (
     ModelChunk,
@@ -24,6 +26,8 @@ from events import (
     AGENT_REQUEST,
     ASSISTANT_CHUNK,
     ASSISTANT_MESSAGE,
+    EXECUTION_ATTEMPT_END,
+    EXECUTION_ATTEMPT_START,
     STEP_END,
     STEP_START,
     TOOL_CALL,
@@ -33,6 +37,16 @@ from events import (
     USER_MESSAGE,
     SessionEvent,
 )
+from extensions import (
+    ABORTED,
+    FAILED,
+    RUNNING,
+    SUCCEEDED,
+    BackendMetadata,
+    Execution,
+    ExecutionAttempt,
+    utc_now,
+)
 from initiator import InitiatorContext, with_initiator
 from surface import SurfaceProjection
 from tool_runtime import ToolCall, ToolResult, ToolRuntime
@@ -40,7 +54,7 @@ from turn_step import ENDED, ExecutionContext, Session, Turn
 
 
 class AgentRuntime:
-    """Deterministic/AgentScope loop: events are appended before projection."""
+    """Deterministic/backend loop: events are appended before projection."""
 
     def __init__(
         self,
@@ -68,6 +82,7 @@ class AgentRuntime:
         self.runtime_context = runtime_context
         self.compaction = compaction
         self.model_name = model_name
+        self.executions: dict[str, Execution] = {}
 
     async def run_turn(
         self,
@@ -92,15 +107,21 @@ class AgentRuntime:
                 ),
             )
             turn.begin()
+            turn_payload: dict = {}
+            mapping = getattr(self.adapter, "mapping_metadata", None)
+            if isinstance(mapping, BackendMetadata):
+                turn_payload["backend_metadata"] = asdict(mapping)
             store.append(
                 SessionEvent(
                     0,
                     TURN_START,
                     self.session.session_id,
                     turn_id=turn.turn_id,
+                    payload=turn_payload,
                 ),
             )
             step = None
+            attempt = None
             try:
                 while True:
                     step = turn.new_step()
@@ -145,11 +166,27 @@ class AgentRuntime:
                     step.model_request = mctx.messages
                     chunk_seqs: list[int] = []
                     tool_results: list[ToolResult] = []
+                    attempt_reason = "model_request"
                     while True:
                         chunk_seqs = []
                         tool_results = []
+                        attempt = self._start_attempt(step, reason=attempt_reason)
+                        attempt_ref = None
+                        attempt_meta = None
                         try:
                             async for evt in self.adapter.stream(ctx, mctx):
+                                if attempt_ref is None:
+                                    attempt_ref = getattr(
+                                        evt,
+                                        "backend_event_ref",
+                                        None,
+                                    )
+                                if attempt_meta is None:
+                                    attempt_meta = getattr(
+                                        evt,
+                                        "backend_metadata",
+                                        None,
+                                    )
                                 if isinstance(evt, ModelChunk):
                                     chunk_seqs.append(
                                         store.append(
@@ -161,6 +198,9 @@ class AgentRuntime:
                                                 step_id=step.step_id,
                                                 payload={
                                                     "content": evt.content,
+                                                    **self._extension_payload(
+                                                        evt,
+                                                    ),
                                                 },
                                             ),
                                         ).seq,
@@ -183,11 +223,19 @@ class AgentRuntime:
                                                     }
                                                     for call in evt.tool_calls
                                                 ],
+                                                **self._extension_payload(evt),
                                             },
                                             source_event_seqs=tuple(chunk_seqs),
                                         ),
                                     )
                                     if not evt.tool_calls:
+                                        self._end_attempt(
+                                            attempt,
+                                            SUCCEEDED,
+                                            step,
+                                            backend_ref=attempt_ref,
+                                            backend_meta=attempt_meta,
+                                        )
                                         step.end()
                                         store.append(
                                             SessionEvent(
@@ -224,6 +272,9 @@ class AgentRuntime:
                                                     "call_id": evt.call_id,
                                                     "name": evt.name,
                                                     "arguments": evt.arguments,
+                                                    **self._extension_payload(
+                                                        evt,
+                                                    ),
                                                 },
                                             ),
                                         )
@@ -234,6 +285,12 @@ class AgentRuntime:
                                                     evt.call_id,
                                                     evt.name,
                                                     evt.arguments,
+                                                    backend_event_ref=(
+                                                        evt.backend_event_ref
+                                                    ),
+                                                    backend_metadata=(
+                                                        evt.backend_metadata
+                                                    ),
                                                 ),
                                                 ctx,
                                             ),
@@ -244,16 +301,57 @@ class AgentRuntime:
                                             ctx,
                                             evt,
                                         )
+                            attempt = self._end_attempt(
+                                attempt,
+                                SUCCEEDED,
+                                step,
+                                backend_ref=attempt_ref,
+                                backend_meta=attempt_meta,
+                            )
                             break
                         except ModelRequestError as exc:
                             if self.compaction is None:
+                                attempt = self._end_attempt(
+                                    attempt,
+                                    FAILED,
+                                    step,
+                                    error=exc.code,
+                                    backend_ref=attempt_ref,
+                                    backend_meta=attempt_meta,
+                                )
                                 raise
                             decision = self.compaction.handle_request_error(
                                 exc.code,
                             )
+                            status = FAILED
+                            end_reason = "model_request"
                             if decision.kind != RETRY:
+                                if decision.reason == "retry_not_safe":
+                                    status = ABORTED
+                                    end_reason = "UNSAFE_RETRY_BLOCKED"
+                                elif decision.reason:
+                                    end_reason = decision.reason
+                                attempt = self._end_attempt(
+                                    attempt,
+                                    status,
+                                    step,
+                                    reason=end_reason,
+                                    error=exc.code,
+                                    backend_ref=attempt_ref,
+                                    backend_meta=attempt_meta,
+                                )
                                 raise
+                            attempt = self._end_attempt(
+                                attempt,
+                                FAILED,
+                                step,
+                                reason=end_reason,
+                                error=exc.code,
+                                backend_ref=attempt_ref,
+                                backend_meta=attempt_meta,
+                            )
                             mctx = self._build_context(current_input, tools)
+                            attempt_reason = "compaction_retry"
                             continue
                     step.end()
                     store.append(
@@ -297,6 +395,13 @@ class AgentRuntime:
                                 ),
                             )
             except Exception:
+                if attempt is not None and attempt.status == RUNNING:
+                    attempt = self._end_attempt(
+                        attempt,
+                        ABORTED,
+                        step,
+                        reason="interrupted",
+                    )
                 if step is not None and step.status != ENDED:
                     step.end()
                     store.append(
@@ -319,6 +424,105 @@ class AgentRuntime:
                     ),
                 )
                 raise
+
+    @staticmethod
+    def _extension_payload(evt) -> dict:
+        payload: dict = {}
+        ref = getattr(evt, "backend_event_ref", None)
+        if ref is not None:
+            payload["backend_event_ref"] = asdict(ref)
+        meta = getattr(evt, "backend_metadata", None)
+        if meta is not None:
+            payload["backend_metadata"] = asdict(meta)
+        return payload
+
+    def _start_attempt(self, step, *, reason: str = "model_request") -> ExecutionAttempt:
+        execution = self.executions.setdefault(
+            step.step_id,
+            Execution(step.step_id),
+        )
+        number = len(execution.attempts) + 1
+        started = utc_now()
+        attempt = ExecutionAttempt(
+            execution_id=step.step_id,
+            attempt_id=f"{step.step_id}/attempt-{number}",
+            attempt_number=number,
+            parent_execution_id=step.step_id if number > 1 else None,
+            reason=reason,
+            status=RUNNING,
+            started_at=started,
+        )
+        execution.attempts.append(attempt)
+        self.session.store.append(
+            SessionEvent(
+                0,
+                EXECUTION_ATTEMPT_START,
+                self.session.session_id,
+                turn_id=step.turn.turn_id,
+                step_id=step.step_id,
+                payload={
+                    "execution_id": attempt.execution_id,
+                    "attempt_id": attempt.attempt_id,
+                    "attempt_number": attempt.attempt_number,
+                    "parent_execution_id": attempt.parent_execution_id,
+                    "reason": attempt.reason,
+                    "status": attempt.status,
+                    "started_at": started,
+                },
+            ),
+        )
+        return attempt
+
+    def _end_attempt(
+        self,
+        attempt: ExecutionAttempt,
+        status: str,
+        step,
+        *,
+        reason: str | None = None,
+        error: str | None = None,
+        backend_ref=None,
+        backend_meta=None,
+    ) -> ExecutionAttempt:
+        if attempt.status != RUNNING:
+            return attempt
+        ended = replace(
+            attempt,
+            status=status,
+            reason=reason if reason is not None else attempt.reason,
+            ended_at=utc_now(),
+            backend_event_ref=backend_ref,
+            backend_metadata=backend_meta,
+        )
+        execution = self.executions[attempt.execution_id]
+        execution.attempts[attempt.attempt_number - 1] = ended
+        payload: dict = {
+            "execution_id": ended.execution_id,
+            "attempt_id": ended.attempt_id,
+            "attempt_number": ended.attempt_number,
+            "parent_execution_id": ended.parent_execution_id,
+            "reason": ended.reason,
+            "status": ended.status,
+            "started_at": ended.started_at,
+            "ended_at": ended.ended_at,
+        }
+        if error is not None:
+            payload["error"] = error
+        if backend_ref is not None:
+            payload["backend_event_ref"] = asdict(backend_ref)
+        if backend_meta is not None:
+            payload["backend_metadata"] = asdict(backend_meta)
+        self.session.store.append(
+            SessionEvent(
+                0,
+                EXECUTION_ATTEMPT_END,
+                self.session.session_id,
+                turn_id=step.turn.turn_id,
+                step_id=step.step_id,
+                payload=payload,
+            ),
+        )
+        return ended
 
     def _build_context(self, current_input: str, tools: tuple[str, ...]):
         return build_model_context(
@@ -369,6 +573,7 @@ class AgentRuntime:
                     "content": evt.content,
                     "is_error": True,
                     "error_code": evt.error_code or "UNKNOWN_TOOL",
+                    **AgentRuntime._extension_payload(evt),
                 },
                 source_event_seqs=(call_ev.seq,),
             ),

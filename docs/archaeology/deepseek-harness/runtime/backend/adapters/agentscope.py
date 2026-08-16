@@ -47,6 +47,7 @@ from agentscope.tool import FunctionTool, Toolkit, ToolChunk
 
 from compaction import ModelContext
 from events import TOOL_RESULT
+from extensions import ADAPTER, EXACT, BackendEventRef, BackendMetadata
 from model_adapter import (
     ModelChunk,
     ModelFinal,
@@ -58,6 +59,12 @@ from model_adapter import (
 )
 from tool_runtime import ToolCall, ToolResult, ToolRuntime
 from turn_step import ExecutionContext
+
+AGENTSCOPE_MISSING_SEMANTICS = (
+    "THINKING_BLOCK_LOSSY",
+    "DATA_BLOCK_LOSSY",
+    "REQUIRE_USER_CONFIRM_NOT_SUPPORTED",
+)
 
 
 class AgentScopeModelAdapter:
@@ -85,7 +92,12 @@ class AgentScopeModelAdapter:
         self.model_name = getattr(model, "model", "agentscope")
         self.delegates_tools = True
         self.step_tool_results: list[ToolResult] = []
-        self._active_call: tuple[str, str] | None = None
+        self.mapping_metadata = BackendMetadata(
+            backend="agentscope",
+            mapping_quality=ADAPTER,
+            missing_semantics=AGENTSCOPE_MISSING_SEMANTICS,
+        )
+        self._active_call: tuple[str, str, BackendEventRef | None] | None = None
         self._result_text: dict[str, str] = {}
 
     async def stream(
@@ -130,7 +142,7 @@ class AgentScopeModelAdapter:
             async for evt in agent.reply_stream(None):
                 if isinstance(evt, TextBlockDeltaEvent):
                     text_parts.append(evt.delta)
-                    yield ModelChunk(evt.delta)
+                    yield ModelChunk(evt.delta, backend_event_ref=self._ref(evt))
                 elif isinstance(evt, ToolCallStartEvent):
                     tool_calls[evt.tool_call_id] = {
                         "id": evt.tool_call_id,
@@ -150,16 +162,25 @@ class AgentScopeModelAdapter:
                         )
                         for tc in tool_calls.values()
                     ]
-                    yield ModelFinal("".join(text_parts), tuple(parsed))
+                    yield ModelFinal(
+                        "".join(text_parts),
+                        tuple(parsed),
+                        backend_event_ref=self._ref(evt),
+                    )
                     text_parts.clear()
                 elif isinstance(evt, ToolResultStartEvent):
                     tc = tool_calls.get(evt.tool_call_id)
                     if tc is not None:
-                        self._active_call = (evt.tool_call_id, tc["name"])
+                        self._active_call = (
+                            evt.tool_call_id,
+                            tc["name"],
+                            self._ref(evt),
+                        )
                         yield ModelToolCallEvent(
                             evt.tool_call_id,
                             tc["name"],
                             self._parse_input(tc["input"]),
+                            backend_event_ref=self._ref(evt),
                         )
                 elif isinstance(evt, ToolResultTextDeltaEvent):
                     self._result_text.setdefault(evt.tool_call_id, "")
@@ -180,6 +201,7 @@ class AgentScopeModelAdapter:
                             log_result.payload["content"],
                             log_error,
                             log_result.payload.get("error_code"),
+                            backend_event_ref=self._ref(evt),
                         )
                     else:
                         tc = tool_calls.get(evt.tool_call_id)
@@ -194,7 +216,9 @@ class AgentScopeModelAdapter:
                             ),
                             True,
                             None if known else "UNKNOWN_TOOL",
+                            backend_event_ref=self._ref(evt),
                         )
+                    tool_calls.pop(evt.tool_call_id, None)
                 elif isinstance(evt, ReplyEndEvent):
                     pass
         except ModelRequestError:
@@ -216,9 +240,14 @@ class AgentScopeModelAdapter:
             active = self._active_call
             if active is None or active[1] != name:
                 raise RuntimeError(f"no active AgentScope tool call for {name}")
-            call_id = active[0]
+            call_id, _, ref = active
             result = await self.tool_runtime.execute(
-                ToolCall(call_id, name, kwargs),
+                ToolCall(
+                    call_id,
+                    name,
+                    kwargs,
+                    backend_event_ref=ref,
+                ),
                 ctx,
             )
             self.step_tool_results.append(result)
@@ -316,6 +345,24 @@ class AgentScopeModelAdapter:
             return value if isinstance(value, dict) else {"raw": value}
         except json.JSONDecodeError:
             return {"raw": raw}
+
+    @staticmethod
+    def _ref(evt) -> BackendEventRef:
+        return BackendEventRef(
+            backend="agentscope",
+            event_id=(
+                getattr(evt, "reply_id", None)
+                or getattr(evt, "tool_call_id", None)
+                or getattr(evt, "block_id", None)
+            ),
+            event_type=type(evt).__name__,
+            reference={
+                "reply_id": getattr(evt, "reply_id", None),
+                "tool_call_id": getattr(evt, "tool_call_id", None),
+                "block_id": getattr(evt, "block_id", None),
+            },
+            quality=EXACT,
+        )
 
 
 __all__ = ["AgentScopeModelAdapter"]

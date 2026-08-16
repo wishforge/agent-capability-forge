@@ -8,12 +8,14 @@ interrupted turn with synthetic closers, then starts a fresh turn.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from event_store import EventStore
 from events import (
     AGENT_REQUEST,
     ASSISTANT_MESSAGE,
+    EXECUTION_ATTEMPT_END,
+    EXECUTION_ATTEMPT_START,
     REQUEST_HEADER,
     STEP_END,
     STEP_START,
@@ -23,6 +25,7 @@ from events import (
     TURN_START,
     SessionEvent,
 )
+from extensions import ABORTED, RUNNING, utc_now
 from runtime import RuntimeCoordinator
 from tool_runtime import ToolCall, ToolRuntime
 from turn_step import Session, Step, Turn
@@ -69,6 +72,28 @@ class ReplayTurn:
 class ReplayHistory:
     session_id: str
     turns: tuple[ReplayTurn, ...]
+    executions: tuple["ReplayExecution", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayAttempt:
+    execution_id: str
+    attempt_id: str
+    attempt_number: int
+    parent_execution_id: str | None
+    reason: str | None
+    status: str
+    started_at: str | None
+    ended_at: str | None
+    error: str | None = None
+    backend_event_ref: dict | None = None
+    backend_metadata: dict | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayExecution:
+    execution_id: str
+    attempts: tuple[ReplayAttempt, ...]
 
 
 @dataclass
@@ -143,8 +168,44 @@ def repair_interrupted_turn(store: EventStore) -> tuple[UnresolvedTool, ...]:
     unresolved = find_unresolved_tools(store)
     open_steps = _open_steps(store)
     open_turns = _open_turns(store)
-    if not unresolved and not open_steps and not open_turns:
+    attempt_starts = [
+        e
+        for e in store.events()
+        if e.event_type == EXECUTION_ATTEMPT_START
+    ]
+    attempt_ended = {
+        e.payload["attempt_id"]
+        for e in store.events()
+        if e.event_type == EXECUTION_ATTEMPT_END
+    }
+    if (
+        not unresolved
+        and not open_steps
+        and not open_turns
+        and all(
+            e.payload["attempt_id"] in attempt_ended
+            for e in attempt_starts
+        )
+    ):
         return ()
+    for start in attempt_starts:
+        if start.payload["attempt_id"] in attempt_ended:
+            continue
+        store.append(
+            SessionEvent(
+                0,
+                EXECUTION_ATTEMPT_END,
+                store.session_id,
+                turn_id=start.turn_id,
+                step_id=start.step_id,
+                payload={
+                    **dict(start.payload),
+                    "status": ABORTED,
+                    "reason": "interrupted",
+                    "ended_at": utc_now(),
+                },
+            ),
+        )
     for tool in unresolved:
         store.append(
             SessionEvent(
@@ -242,6 +303,9 @@ def replay(store: EventStore, session_id: str | None = None) -> ReplayHistory:
             f"{store.session_id!r}",
         )
     turns: list[ReplayTurn] = []
+    execution_order: list[str] = []
+    execution_attempts: dict[str, list[ReplayAttempt]] = {}
+    attempts_by_id: dict[str, ReplayAttempt] = {}
     current_turn: _TurnBuilder | None = None
     current_step: _StepBuilder | None = None
     for event in store.events():
@@ -287,6 +351,49 @@ def replay(store: EventStore, session_id: str | None = None) -> ReplayHistory:
                         source_event_seqs=event.source_event_seqs,
                     ),
                 )
+        elif event.event_type == EXECUTION_ATTEMPT_START:
+            p = event.payload
+            attempt = ReplayAttempt(
+                execution_id=p["execution_id"],
+                attempt_id=p["attempt_id"],
+                attempt_number=p["attempt_number"],
+                parent_execution_id=p.get("parent_execution_id"),
+                reason=p.get("reason"),
+                status=p.get("status", RUNNING),
+                started_at=p.get("started_at"),
+                ended_at=None,
+                error=None,
+                backend_event_ref=p.get("backend_event_ref"),
+                backend_metadata=p.get("backend_metadata"),
+            )
+            exec_id = p["execution_id"]
+            if exec_id not in execution_attempts:
+                execution_order.append(exec_id)
+                execution_attempts[exec_id] = []
+            execution_attempts[exec_id].append(attempt)
+            attempts_by_id[attempt.attempt_id] = attempt
+        elif event.event_type == EXECUTION_ATTEMPT_END:
+            p = event.payload
+            attempt = attempts_by_id.get(p["attempt_id"])
+            if attempt is None:
+                raise ValueError(
+                    "attempt/end without matching attempt/start",
+                )
+            updated = replace(
+                attempt,
+                status=p.get("status", attempt.status),
+                reason=p.get("reason", attempt.reason),
+                ended_at=p.get("ended_at"),
+                error=p.get("error"),
+                backend_event_ref=p.get("backend_event_ref"),
+                backend_metadata=p.get("backend_metadata"),
+            )
+            attempts_by_id[p["attempt_id"]] = updated
+            exec_id = p["execution_id"]
+            index = updated.attempt_number - 1
+            if index >= len(execution_attempts[exec_id]):
+                raise ValueError("attempt/end out of order")
+            execution_attempts[exec_id][index] = updated
     if current_turn is not None:
         turns.append(
             ReplayTurn(
@@ -295,7 +402,11 @@ def replay(store: EventStore, session_id: str | None = None) -> ReplayHistory:
                 tuple(_finalize_step(s) for s in current_turn.steps),
             ),
         )
-    return ReplayHistory(store.session_id, tuple(turns))
+    executions = tuple(
+        ReplayExecution(exec_id, tuple(execution_attempts[exec_id]))
+        for exec_id in execution_order
+    )
+    return ReplayHistory(store.session_id, tuple(turns), executions)
 
 
 def _finalize_step(builder: _StepBuilder) -> ReplayStep:
@@ -338,6 +449,8 @@ __all__ = [
     "TOOL_NOT_STARTED",
     "TOOL_OUTCOME_UNKNOWN",
     "ReplayHistory",
+    "ReplayAttempt",
+    "ReplayExecution",
     "ReplayStep",
     "ReplayToolResult",
     "ReplayTurn",

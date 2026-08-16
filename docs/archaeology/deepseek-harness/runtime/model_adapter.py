@@ -1,9 +1,9 @@
 """Phase 5-B.1 ModelAdapter: backend-neutral runtime-facing model contract.
 
 The runtime only depends on this interface and the deterministic
-ScriptedModelAdapter. Backend-specific adapters (AgentScope today, Codex
-later) live under backend/adapters/ and are injected by the caller, so the
-runtime never imports a concrete backend.
+ScriptedModelAdapter. Backend-specific adapters live under backend/adapters/
+and are injected by the caller, so the runtime never imports a concrete
+backend.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
 from compaction import ModelContext
+from extensions import BackendEventRef, BackendMetadata
 from tool_runtime import ToolResult
 from turn_step import ExecutionContext
 
@@ -34,12 +35,16 @@ class ModelResponse:
 @dataclass(frozen=True, slots=True)
 class ModelChunk:
     content: str
+    backend_event_ref: BackendEventRef | None = None
+    backend_metadata: BackendMetadata | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ModelFinal:
     content: str
     tool_calls: tuple[ModelToolCall, ...]
+    backend_event_ref: BackendEventRef | None = None
+    backend_metadata: BackendMetadata | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +52,8 @@ class ModelToolCallEvent:
     call_id: str
     name: str
     arguments: dict
+    backend_event_ref: BackendEventRef | None = None
+    backend_metadata: BackendMetadata | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +62,8 @@ class ModelToolResultEvent:
     content: str
     is_error: bool
     error_code: str | None
+    backend_event_ref: BackendEventRef | None = None
+    backend_metadata: BackendMetadata | None = None
 
 
 class ModelRequestError(Exception):
@@ -83,7 +92,7 @@ def classify_model_error(exc: BaseException) -> str:
 
 
 class ModelAdapter(Protocol):
-    """One runtime interface for deterministic and AgentScope models."""
+    """One runtime interface for deterministic and backend adapters."""
 
     delegates_tools: bool
     step_tool_results: list[ToolResult]

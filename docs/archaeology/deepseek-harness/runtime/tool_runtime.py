@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Callable
 
 from events import TOOL_CALL, TOOL_RESULT, SessionEvent
+from extensions import BackendEventRef, BackendMetadata
 from turn_step import ExecutionContext
 
 ALLOW = "allow"
@@ -27,6 +28,8 @@ class ToolCall:
     arguments: dict
     root_call_id: str | None = None
     parent_call_id: str | None = None
+    backend_event_ref: BackendEventRef | None = None
+    backend_metadata: BackendMetadata | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +89,17 @@ class ToolRuntime:
         self._cancelled.setdefault(call_id, asyncio.Event()).set()
 
     async def execute(self, call: ToolCall, ctx: ExecutionContext) -> ToolResult:
+        payload = {
+            "call_id": call.call_id,
+            "name": call.name,
+            "arguments": call.arguments,
+            "root_call_id": call.root_call_id,
+            "parent_call_id": call.parent_call_id,
+        }
+        if call.backend_event_ref is not None:
+            payload["backend_event_ref"] = asdict(call.backend_event_ref)
+        if call.backend_metadata is not None:
+            payload["backend_metadata"] = asdict(call.backend_metadata)
         call_event = ctx.store.append(
             SessionEvent(
                 0,
@@ -93,13 +107,7 @@ class ToolRuntime:
                 ctx.session.session_id,
                 turn_id=ctx.turn.turn_id,
                 step_id=ctx.step.step_id,
-                payload={
-                    "call_id": call.call_id,
-                    "name": call.name,
-                    "arguments": call.arguments,
-                    "root_call_id": call.root_call_id,
-                    "parent_call_id": call.parent_call_id,
-                },
+                payload=payload,
             ),
         )
         ctx.step.tool_calls.append(call)

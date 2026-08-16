@@ -60,6 +60,8 @@ from llm_judge import (
     LOW,
     MEDIUM,
     PASS,
+    UNKNOWN,
+    VIOLATED,
     OracleReference,
     SUFFICIENT,
     TASK_JUDGE_01,
@@ -76,7 +78,10 @@ from llm_judge import (
     _CONFIDENCES,
     _context_provenance,
     assess_evidence,
+    assess_conditions,
     check_behavioral,
+    condition_findings,
+    condition_verdict,
     _dedupe_refs,
     _default_evidence,
     _final_messages,
@@ -195,6 +200,7 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
         jinput.task_specification,
         jinput.oracle_reference,
     )
+    conditions = assess_conditions(jinput.execution_record, jinput.oracle_reference)
     evidence = {
         "task_specification": _to_plain(jinput.task_specification),
         "execution_record": _render_execution(jinput.execution_record),
@@ -211,6 +217,16 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
             {"rule_id": finding.rule_id, "status": finding.status, "message": finding.message}
             for finding in behavioral
         ],
+        "condition_assessments": [
+            {
+                "condition_id": assessment.condition_id,
+                "polarity": assessment.polarity,
+                "status": assessment.status,
+                "reason": assessment.reason,
+            }
+            for assessment in conditions
+        ],
+        "condition_verdict": condition_verdict(conditions),
     }
     payload = json.dumps(evidence, ensure_ascii=False, indent=2)
     schema = (
@@ -230,7 +246,10 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
             "evidence_sufficiency.verdict is not SUFFICIENT, return "
             "INCONCLUSIVE with LOW confidence; if any "
             "behavioral_constraints entry has status FAIL, return FAIL "
-            "regardless of the final answer. Judge semantic criteria "
+            "regardless of the final answer. condition_assessments are also "
+            "deterministic and authoritative: any VIOLATED condition forces "
+            "FAIL, any UNKNOWN condition forces INCONCLUSIVE, and neither may "
+            "be overridden. Judge semantic criteria "
             "strictly from evidence actually present; never infer missing "
             "facts."
         )
@@ -363,7 +382,7 @@ class DeepSeekJudgeProvider:
         payload: dict,
         template: JudgePromptTemplate,
     ) -> LLMJudgeResult:
-        status = payload.get("status")
+        status = "INCONCLUSIVE" if payload.get("status") == UNKNOWN else payload.get("status")
         confidence = payload.get("confidence")
         score = payload.get("score")
         if status not in _STATUSES:
@@ -391,6 +410,8 @@ class DeepSeekJudgeProvider:
         for criterion in rubric.criteria:
             raw = by_id.get(criterion.criterion_id, {})
             finding_status = raw.get("status", status)
+            if finding_status == UNKNOWN:
+                finding_status = INCONCLUSIVE
             if finding_status not in _STATUSES:
                 raise JudgeProviderError(
                     INVALID_OUTPUT,
@@ -499,6 +520,8 @@ class DeepSeekJudgeProvider:
         behavioral_inconclusive = tuple(
             finding for finding in behavioral if finding.status == INCONCLUSIVE
         )
+        conditions = assess_conditions(record, jinput.oracle_reference)
+        conditions_verdict = condition_verdict(conditions)
         if behavioral_fail:
             message = "; ".join(finding.message for finding in behavioral_fail)
             return LLMJudgeResult(
@@ -526,6 +549,28 @@ class DeepSeekJudgeProvider:
                 prompt_version=result.prompt_version,
                 rubric_ref=result.rubric_ref,
             )
+        if conditions_verdict == FAIL:
+            message = "; ".join(
+                assessment.reason
+                for assessment in conditions
+                if assessment.status == VIOLATED
+            )
+            return LLMJudgeResult(
+                judge_id=result.judge_id,
+                status=FAIL,
+                score=result.score,
+                reasoning_summary=(
+                    f"{result.reasoning_summary} | condition oracle guard: {message}"
+                ),
+                findings=result.findings + condition_findings(conditions),
+                evidence_refs=result.evidence_refs,
+                confidence=result.confidence,
+                model_ref=result.model_ref,
+                model_version=result.model_version,
+                prompt_ref=result.prompt_ref,
+                prompt_version=result.prompt_version,
+                rubric_ref=result.rubric_ref,
+            )
         if behavioral_inconclusive:
             message = "; ".join(finding.message for finding in behavioral_inconclusive)
             return LLMJudgeResult(
@@ -545,6 +590,28 @@ class DeepSeekJudgeProvider:
                     )
                     for finding in behavioral_inconclusive
                 ),
+                evidence_refs=result.evidence_refs,
+                confidence=LOW,
+                model_ref=result.model_ref,
+                model_version=result.model_version,
+                prompt_ref=result.prompt_ref,
+                prompt_version=result.prompt_version,
+                rubric_ref=result.rubric_ref,
+            )
+        if conditions_verdict == INCONCLUSIVE:
+            message = "; ".join(
+                assessment.reason
+                for assessment in conditions
+                if assessment.status == UNKNOWN
+            )
+            return LLMJudgeResult(
+                judge_id=result.judge_id,
+                status=INCONCLUSIVE,
+                score=None,
+                reasoning_summary=(
+                    f"{result.reasoning_summary} | condition oracle guard: {message}"
+                ),
+                findings=result.findings + condition_findings(conditions),
                 evidence_refs=result.evidence_refs,
                 confidence=LOW,
                 model_ref=result.model_ref,

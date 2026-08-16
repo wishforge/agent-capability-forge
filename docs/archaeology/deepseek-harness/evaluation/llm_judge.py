@@ -30,10 +30,20 @@ JUDGE_CONFLICT = "JUDGE_CONFLICT"
 SUFFICIENT = "SUFFICIENT"
 INSUFFICIENT = "INSUFFICIENT"
 AMBIGUOUS = "AMBIGUOUS"
+SATISFIED = "SATISFIED"
+VIOLATED = "VIOLATED"
+UNKNOWN = "UNKNOWN"
 
 _STATUSES = frozenset({PASS, FAIL, INCONCLUSIVE})
 _CONFIDENCES = frozenset({HIGH, MEDIUM, LOW})
 _CONFIDENCE_ORDER = {HIGH: 0, MEDIUM: 1, LOW: 2}
+_CONDITION_STATUSES = frozenset({SATISFIED, VIOLATED, UNKNOWN})
+_CONDITION_VERDICT_MAP = {SATISFIED: PASS, VIOLATED: FAIL, UNKNOWN: INCONCLUSIVE}
+# Claim-bearing signals per design doc 44 §7. This is the closed dataset-level
+# table: numbers are claim-bearing; the listed state words are claim-bearing;
+# anything else is not evidence.
+_CLAIM_BEARING_TOKENS = ("库存", "不足", "满足", "无需", "已生成", "已提交", "成功", "创建")
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
 def _get(obj: Any, name: str, default: Any = None) -> Any:
@@ -128,6 +138,26 @@ class EvidenceAssessment:
     def __post_init__(self) -> None:
         if self.verdict not in (SUFFICIENT, INSUFFICIENT, AMBIGUOUS):
             raise ValueError(f"invalid evidence verdict {self.verdict!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ConditionAssessment:
+    """One oracle condition's deterministic status."""
+
+    condition_id: str
+    polarity: str
+    status: str
+    reason: str
+    evidence_refs: tuple[dict, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.polarity not in ("required", "forbidden"):
+            raise ValueError(f"invalid condition polarity {self.polarity!r}")
+        if self.status not in _CONDITION_STATUSES:
+            raise ValueError(f"invalid condition status {self.status!r}")
+        for ref in self.evidence_refs:
+            if not isinstance(ref, dict):
+                raise TypeError("condition assessment evidence_refs must be dicts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -740,10 +770,185 @@ def _message_text(messages: tuple[str, ...]) -> str:
 
 
 def _numbers(text: str) -> tuple[float, ...]:
-    return tuple(float(token) for token in re.findall(r"\d+(?:\.\d+)?", text))
+    return tuple(float(token) for token in _NUMBER_RE.findall(text))
 
 
-def _default_verdict(jinput: LLMJudgeInput, criterion: JudgeCriterion) -> JudgeFinding:
+def _condition_ref(
+    record: Any,
+    oracle: Any,
+    condition_id: str,
+    polarity: str,
+) -> dict:
+    ref = {
+        "execution_id": _get(record, "execution_id"),
+        "oracle_id": _get(oracle, "oracle_id"),
+        "condition_id": condition_id,
+        "polarity": polarity,
+    }
+    return {key: value for key, value in ref.items() if value is not None}
+
+
+def _numeric_phrase_pattern(target: str) -> tuple[re.Pattern | None, tuple[float, ...]]:
+    """Regex for a target phrase with each Arabic number as a capture group."""
+    numbers = tuple(float(token) for token in _NUMBER_RE.findall(target))
+    if not numbers:
+        return None, ()
+    pattern = ""
+    last = 0
+    for match in _NUMBER_RE.finditer(target):
+        pattern += re.escape(target[last : match.start()])
+        pattern += r"\s*(\d+(?:\.\d+)?)\s*"
+        last = match.end()
+    pattern += re.escape(target[last:])
+    return re.compile(pattern), numbers
+
+
+def _execution_text(record: Any) -> str:
+    chunks: list[str] = []
+    for tool in tuple(_get(record, "tools", ()) or ()):
+        chunks.append(str(_get(tool, "name", "")))
+        chunks.append(str(_get(tool, "arguments", {})))
+    for result in tuple(_get(record, "tool_results", ()) or ()):
+        chunks.append(str(_get(result, "content", "")))
+    for side_effect in tuple(_get(record, "side_effects", ()) or ()):
+        chunks.append(str(side_effect))
+    return "\n".join(chunk for chunk in chunks if chunk)
+
+
+def assess_conditions(record: Any, oracle: Any) -> tuple[ConditionAssessment, ...]:
+    """Deterministic per-condition oracle semantics; no LLM, no state mutation.
+
+    required conditions are SATISFIED only on positive evidence (explicit
+    coverage, declared alternative, or numeric target within tolerance).
+    A message with any claim-bearing signal but no coverage is VIOLATED;
+    a bare/action-phrase message with no claim-bearing signal is UNKNOWN.
+    forbidden conditions are VIOLATED when the item appears in the final
+    message or execution evidence.
+    """
+    messages = _final_messages(record)
+    text = _message_text(messages)
+    execution_text = _execution_text(record)
+    assessments: list[ConditionAssessment] = []
+
+    required = tuple(_get(oracle, "required_conditions", ()) or ())
+    if not required:
+        expected = _get(oracle, "expected_answer")
+        required = (expected,) if expected else ()
+    alternatives = tuple(_get(oracle, "acceptable_alternatives", ()) or ())
+    tolerance = _get(oracle, "tolerance")
+
+    for index, condition in enumerate(required, start=1):
+        condition_id = f"REQ-{index:02d}"
+        reason = ""
+        status = UNKNOWN
+        if not messages:
+            reason = "no final assistant message; required condition cannot be verified"
+        elif any(condition and condition in text for condition in tuple(_get(oracle, "forbidden_conditions", ()) or ())):
+            status = VIOLATED
+            reason = "final answer contains a forbidden oracle condition"
+        elif condition and condition in text:
+            status = SATISFIED
+            reason = "final answer explicitly covers required condition"
+        elif len(required) == 1 and alternatives and any(
+            alternative and alternative in text for alternative in alternatives
+        ):
+            # ponytail: alternatives map to the single required condition;
+            # add per-condition alternative maps when multi-condition oracles need them.
+            status = SATISFIED
+            reason = "final answer covers a declared acceptable alternative"
+        elif tolerance is not None:
+            pattern, target_numbers = _numeric_phrase_pattern(condition)
+            if pattern is not None:
+                match = pattern.search(text)
+                if match is not None:
+                    actual_numbers = tuple(float(token) for token in match.groups())
+                    if all(
+                        abs(actual - target) <= tolerance
+                        for actual, target in zip(actual_numbers, target_numbers)
+                    ):
+                        status = SATISFIED
+                        reason = "final answer numeric target is within oracle tolerance"
+                    else:
+                        status = VIOLATED
+                        reason = "final answer numeric target is outside oracle tolerance"
+        if status == UNKNOWN and text and (
+            _numbers(text) or any(token in text for token in _CLAIM_BEARING_TOKENS)
+        ):
+            status = VIOLATED
+            reason = "claim-bearing signal present but required condition is not covered"
+        if status == UNKNOWN:
+            reason = reason or (
+                "bare/action-phrase final answer; no claim-bearing signal"
+                if text
+                else "no final assistant message; required condition cannot be verified"
+            )
+        assessments.append(
+            ConditionAssessment(
+                condition_id,
+                "required",
+                status,
+                reason,
+                (_condition_ref(record, oracle, condition_id, "required"),),
+            ),
+        )
+
+    for index, forbidden in enumerate(
+        tuple(_get(oracle, "forbidden_conditions", ()) or ()),
+        start=1,
+    ):
+        condition_id = f"FORB-{index:02d}"
+        if forbidden and (forbidden in text or forbidden in execution_text):
+            status = VIOLATED
+            reason = "forbidden item present in final answer or execution evidence"
+        elif not messages and not execution_text:
+            status = UNKNOWN
+            reason = "no final message or execution evidence; forbidden item cannot be verified"
+        else:
+            status = SATISFIED
+            reason = "forbidden item absent from final answer and execution evidence"
+        assessments.append(
+            ConditionAssessment(
+                condition_id,
+                "forbidden",
+                status,
+                reason,
+                (_condition_ref(record, oracle, condition_id, "forbidden"),),
+            ),
+        )
+
+    return tuple(assessments)
+
+
+def condition_verdict(assessments: tuple[ConditionAssessment, ...]) -> str | None:
+    """Aggregate condition statuses: VIOLATED > UNKNOWN > SATISFIED."""
+    if not assessments:
+        return None
+    if any(assessment.status == VIOLATED for assessment in assessments):
+        return FAIL
+    if any(assessment.status == UNKNOWN for assessment in assessments):
+        return INCONCLUSIVE
+    return PASS
+
+
+def condition_findings(
+    assessments: tuple[ConditionAssessment, ...],
+) -> tuple[JudgeFinding, ...]:
+    return tuple(
+        JudgeFinding(
+            f"CONDITION-{assessment.condition_id}",
+            _CONDITION_VERDICT_MAP[assessment.status],
+            assessment.reason,
+            assessment.evidence_refs,
+        )
+        for assessment in assessments
+    )
+
+
+def _default_verdict(
+    jinput: LLMJudgeInput,
+    criterion: JudgeCriterion,
+    conditions: tuple[ConditionAssessment, ...] = (),
+) -> JudgeFinding:
     messages = _final_messages(jinput.execution_record)
     oracle = jinput.oracle_reference
     criterion_id = criterion.criterion_id
@@ -754,55 +959,69 @@ def _default_verdict(jinput: LLMJudgeInput, criterion: JudgeCriterion) -> JudgeF
         else:
             status, message = PASS, "final assistant message present"
     elif criterion_id == "CRITERION-02":  # correctness
-        expected = _get(oracle, "expected_answer")
-        required = tuple(_get(oracle, "required_conditions", ()) or ())
-        forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
-        alternatives = tuple(_get(oracle, "acceptable_alternatives", ()) or ())
-        tolerance = _get(oracle, "tolerance")
-        if not messages:
-            status, message = INCONCLUSIVE, "no final assistant message in record"
-        elif any(condition and condition in text for condition in forbidden):
-            status, message = FAIL, "final answer violates a forbidden oracle condition"
-        elif tolerance is not None and expected:
-            expected_numbers = _numbers(expected)
-            actual_numbers = _numbers(text)
-            if expected_numbers and actual_numbers and any(
-                abs(actual - expected_numbers[0]) <= tolerance
-                for actual in actual_numbers
-            ):
-                status, message = PASS, "final answer is numerically within oracle tolerance"
-            elif expected_numbers and actual_numbers:
-                status, message = FAIL, "final answer is numerically outside oracle tolerance"
+        condition_status = condition_verdict(conditions)
+        if condition_status is not None:
+            status, message = condition_status, "; ".join(
+                f"{assessment.condition_id}={assessment.status}: {assessment.reason}"
+                for assessment in conditions
+            )
+        else:
+            expected = _get(oracle, "expected_answer")
+            required = tuple(_get(oracle, "required_conditions", ()) or ())
+            forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
+            alternatives = tuple(_get(oracle, "acceptable_alternatives", ()) or ())
+            tolerance = _get(oracle, "tolerance")
+            if not messages:
+                status, message = INCONCLUSIVE, "no final assistant message in record"
+            elif any(condition and condition in text for condition in forbidden):
+                status, message = FAIL, "final answer violates a forbidden oracle condition"
+            elif tolerance is not None and expected:
+                expected_numbers = _numbers(expected)
+                actual_numbers = _numbers(text)
+                if expected_numbers and actual_numbers and any(
+                    abs(actual - expected_numbers[0]) <= tolerance
+                    for actual in actual_numbers
+                ):
+                    status, message = PASS, "final answer is numerically within oracle tolerance"
+                elif expected_numbers and actual_numbers:
+                    status, message = FAIL, "final answer is numerically outside oracle tolerance"
+                else:
+                    status, message = INCONCLUSIVE, "oracle tolerance cannot be checked against final answer"
+            elif expected and expected in text:
+                status, message = PASS, "final answer matches oracle expected answer"
+            elif alternatives and any(alternative in text for alternative in alternatives):
+                status, message = PASS, "final answer matches an acceptable oracle alternative"
+            elif required and not all(condition in text for condition in required):
+                status, message = FAIL, "final answer misses required oracle condition"
+            elif required:
+                status, message = PASS, "final answer satisfies all required oracle conditions"
+            elif not expected:
+                status, message = INCONCLUSIVE, "oracle expected_answer missing"
             else:
-                status, message = INCONCLUSIVE, "oracle tolerance cannot be checked against final answer"
-        elif expected and expected in text:
-            status, message = PASS, "final answer matches oracle expected answer"
-        elif alternatives and any(alternative in text for alternative in alternatives):
-            status, message = PASS, "final answer matches an acceptable oracle alternative"
-        elif required and not all(condition in text for condition in required):
-            status, message = FAIL, "final answer misses required oracle condition"
-        elif required:
-            status, message = PASS, "final answer satisfies all required oracle conditions"
-        elif not expected:
-            status, message = INCONCLUSIVE, "oracle expected_answer missing"
-        else:
-            status, message = FAIL, "final answer does not match oracle expected answer"
+                status, message = FAIL, "final answer does not match oracle expected answer"
     elif criterion_id == "CRITERION-03":  # business relevance
-        expected = _get(oracle, "expected_business_outcome")
-        required = tuple(_get(oracle, "required_conditions", ()) or ())
-        forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
-        if not messages:
-            status, message = INCONCLUSIVE, "no final assistant message in record"
-        elif any(condition and condition in text for condition in forbidden):
-            status, message = FAIL, "final answer violates a forbidden oracle condition"
-        elif expected and expected in text:
-            status, message = PASS, "final answer reflects expected business outcome"
-        elif required and all(condition in text for condition in required):
-            status, message = PASS, "final answer satisfies required oracle conditions"
-        elif expected or required:
-            status, message = FAIL, "final answer misses expected business outcome"
+        condition_status = condition_verdict(conditions)
+        if condition_status is not None:
+            status, message = condition_status, "; ".join(
+                f"{assessment.condition_id}={assessment.status}: {assessment.reason}"
+                for assessment in conditions
+            )
         else:
-            status, message = INCONCLUSIVE, "oracle expected_business_outcome missing"
+            expected = _get(oracle, "expected_business_outcome")
+            required = tuple(_get(oracle, "required_conditions", ()) or ())
+            forbidden = tuple(_get(oracle, "forbidden_conditions", ()) or ())
+            if not messages:
+                status, message = INCONCLUSIVE, "no final assistant message in record"
+            elif any(condition and condition in text for condition in forbidden):
+                status, message = FAIL, "final answer violates a forbidden oracle condition"
+            elif expected and expected in text:
+                status, message = PASS, "final answer reflects expected business outcome"
+            elif required and all(condition in text for condition in required):
+                status, message = PASS, "final answer satisfies required oracle conditions"
+            elif expected or required:
+                status, message = FAIL, "final answer misses expected business outcome"
+            else:
+                status, message = INCONCLUSIVE, "oracle expected_business_outcome missing"
     elif criterion_id == "CRITERION-04":  # output quality
         if not messages:
             status, message = INCONCLUSIVE, "no final assistant message in record"
@@ -856,9 +1075,11 @@ def fake_judge(
     record = jinput.execution_record
     assessment = assess_evidence(record, jinput.task_specification, jinput.oracle_reference)
     behavioral = check_behavioral(record, jinput.task_specification, jinput.oracle_reference)
+    conditions = assess_conditions(record, jinput.oracle_reference)
+    conditions_verdict = condition_verdict(conditions)
     forced: str | None = None
     forced_message = ""
-    forced_behavioral: tuple[Finding, ...] = ()
+    forced_findings: tuple[JudgeFinding, ...] = ()
     if assessment.verdict != SUFFICIENT:
         forced = INCONCLUSIVE
         forced_message = f"evidence {assessment.verdict}: " + "; ".join(
@@ -872,13 +1093,35 @@ def fake_judge(
         if behavioral_fail:
             forced = FAIL
             forced_message = "; ".join(finding.message for finding in behavioral_fail)
-            forced_behavioral = behavioral_fail
+            forced_findings = tuple(
+                JudgeFinding(finding.rule_id, finding.status, finding.message, finding.evidence_refs)
+                for finding in behavioral_fail
+            )
+        elif conditions_verdict == FAIL:
+            forced = FAIL
+            forced_message = "; ".join(
+                assessment.reason
+                for assessment in conditions
+                if assessment.status == VIOLATED
+            )
+            forced_findings = condition_findings(conditions)
         elif behavioral_inconclusive:
             forced = INCONCLUSIVE
             forced_message = "; ".join(
                 finding.message for finding in behavioral_inconclusive
             )
-            forced_behavioral = behavioral_inconclusive
+            forced_findings = tuple(
+                JudgeFinding(finding.rule_id, finding.status, finding.message, finding.evidence_refs)
+                for finding in behavioral_inconclusive
+            )
+        elif conditions_verdict == INCONCLUSIVE:
+            forced = INCONCLUSIVE
+            forced_message = "; ".join(
+                assessment.reason
+                for assessment in conditions
+                if assessment.status == UNKNOWN
+            )
+            forced_findings = condition_findings(conditions)
 
     findings: list[JudgeFinding] = []
     for criterion in rubric.criteria:
@@ -894,7 +1137,7 @@ def fake_judge(
             continue
         verdict = (verdicts or {}).get(criterion.criterion_id)
         if verdict is None:
-            findings.append(_default_verdict(jinput, criterion))
+            findings.append(_default_verdict(jinput, criterion, conditions))
             continue
         status = verdict.get("status", PASS)
         if status not in _STATUSES:
@@ -919,10 +1162,7 @@ def fake_judge(
             ),
         )
 
-    findings.extend(
-        JudgeFinding(finding.rule_id, finding.status, finding.message, finding.evidence_refs)
-        for finding in forced_behavioral
-    )
+    findings.extend(forced_findings)
     status = forced or _overall_status(tuple(findings))
     if forced:
         confidence = LOW if status == INCONCLUSIVE else (confidence or HIGH)
@@ -1214,6 +1454,7 @@ GOLDEN_JUDGE_TASKS = (
 
 __all__ = [
     "AMBIGUOUS",
+    "ConditionAssessment",
     "EvidenceAssessment",
     "FAIL",
     "GOLDEN_JUDGE_TASKS",
@@ -1234,6 +1475,7 @@ __all__ = [
     "OracleReference",
     "PASS",
     "SUFFICIENT",
+    "SATISFIED",
     "SUPPORTED",
     "TASK_JUDGE_01",
     "TASK_JUDGE_01_RECORD",
@@ -1246,9 +1488,14 @@ __all__ = [
     "TASK_JUDGE_ORACLE",
     "ToolCallConstraint",
     "UNSUPPORTED",
+    "UNKNOWN",
+    "VIOLATED",
     "UnifiedEvaluationResult",
     "aggregate",
     "assess_evidence",
+    "assess_conditions",
     "check_behavioral",
+    "condition_findings",
+    "condition_verdict",
     "fake_judge",
 ]

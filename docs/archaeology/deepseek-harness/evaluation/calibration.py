@@ -30,10 +30,13 @@ from llm_judge import (
     LOW,
     MEDIUM,
     PASS,
+    SUFFICIENT,
     OracleReference,
     ToolCallConstraint,
     assess_evidence,
+    assess_conditions,
     check_behavioral,
+    condition_verdict,
 )
 from models import TaskSpecification
 
@@ -375,12 +378,19 @@ def calibration_run_record(
         jinput.task_specification,
         jinput.oracle_reference,
     )
+    conditions = assess_conditions(jinput.execution_record, jinput.oracle_reference)
+    conditions_verdict = condition_verdict(conditions)
     behavioral_status = (
         FAIL
         if any(finding.status == FAIL for finding in behavioral)
         else INCONCLUSIVE
         if any(finding.status == INCONCLUSIVE for finding in behavioral)
         else PASS
+    )
+    deterministic_verdict = _deterministic_verdict(
+        evidence,
+        behavioral,
+        conditions_verdict,
     )
     return {
         "judge_run_id": result.judge_id,
@@ -399,12 +409,52 @@ def calibration_run_record(
         "evidence_reasons": list(evidence.reasons),
         "missing_observations": list(evidence.missing_observations),
         "oracle_status": behavioral_status,
+        "condition_statuses": [
+            {
+                "condition_id": assessment.condition_id,
+                "polarity": assessment.polarity,
+                "status": assessment.status,
+                "reason": assessment.reason,
+            }
+            for assessment in conditions
+        ],
+        "condition_verdict": conditions_verdict,
+        "aggregation_source": (
+            "DETERMINISTIC"
+            if deterministic_verdict is not None
+            and result.status == deterministic_verdict
+            else "FAKE_RUBRIC"
+            if result.model_ref.startswith("fake")
+            else "LLM_FALLBACK"
+        ),
+        "final_verdict": result.status,
         "result": result.status,
         "score": result.score,
         "confidence": result.confidence,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "usage": usage,
     }
+
+
+def _deterministic_verdict(
+    evidence: Any,
+    behavioral: tuple[Any, ...],
+    conditions_verdict: str | None,
+) -> str | None:
+    """The status the deterministic gates alone would force, if any."""
+    if evidence.verdict != SUFFICIENT:
+        return INCONCLUSIVE
+    if any(finding.status == FAIL for finding in behavioral):
+        return FAIL
+    if conditions_verdict == FAIL:
+        return FAIL
+    if any(finding.status == INCONCLUSIVE for finding in behavioral):
+        return INCONCLUSIVE
+    if conditions_verdict == INCONCLUSIVE:
+        return INCONCLUSIVE
+    if conditions_verdict == PASS:
+        return PASS
+    return None
 
 
 def append_calibration_run(path: Path, record: dict) -> None:

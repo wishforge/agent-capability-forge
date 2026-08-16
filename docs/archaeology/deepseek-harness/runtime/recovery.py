@@ -8,6 +8,7 @@ interrupted turn with synthetic closers, then starts a fresh turn.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 
 from event_store import EventStore
@@ -88,12 +89,36 @@ class ReplayAttempt:
     error: str | None = None
     backend_event_ref: dict | None = None
     backend_metadata: dict | None = None
+    step_id: str | None = None
+    initiator_ref: dict | None = None
+    context_provenance: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ReplayExecution:
     execution_id: str
     attempts: tuple[ReplayAttempt, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionRecord:
+    """Immutable evaluation-facing projection of one execution (5-G/5-H).
+
+    Pure projection from the Event Log: never a second source of truth and
+    never written back into the runtime.
+    """
+
+    record_version: str
+    projection_rule_version: str
+    execution_id: str
+    session_id: str
+    initiator_ref: dict | None
+    owner_refs: tuple[dict, ...]
+    attempts: tuple[ReplayAttempt, ...]
+    tools: tuple[dict, ...]
+    events: tuple[tuple[int, str], ...]
+    backend_refs: tuple[dict, ...]
+    context_provenance: tuple[dict, ...]
 
 
 @dataclass
@@ -365,6 +390,9 @@ def replay(store: EventStore, session_id: str | None = None) -> ReplayHistory:
                 error=None,
                 backend_event_ref=p.get("backend_event_ref"),
                 backend_metadata=p.get("backend_metadata"),
+                step_id=event.step_id,
+                initiator_ref=p.get("initiator_ref"),
+                context_provenance=p.get("context_provenance"),
             )
             exec_id = p["execution_id"]
             if exec_id not in execution_attempts:
@@ -387,6 +415,15 @@ def replay(store: EventStore, session_id: str | None = None) -> ReplayHistory:
                 error=p.get("error"),
                 backend_event_ref=p.get("backend_event_ref"),
                 backend_metadata=p.get("backend_metadata"),
+                step_id=p.get("step_id", attempt.step_id),
+                initiator_ref=p.get(
+                    "initiator_ref",
+                    attempt.initiator_ref,
+                ),
+                context_provenance=p.get(
+                    "context_provenance",
+                    attempt.context_provenance,
+                ),
             )
             attempts_by_id[p["attempt_id"]] = updated
             exec_id = p["execution_id"]
@@ -407,6 +444,77 @@ def replay(store: EventStore, session_id: str | None = None) -> ReplayHistory:
         for exec_id in execution_order
     )
     return ReplayHistory(store.session_id, tuple(turns), executions)
+
+
+def _unique_dicts(values) -> tuple[dict, ...]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for value in values:
+        key = json.dumps(value, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            out.append(dict(value))
+    return tuple(out)
+
+
+def build_execution_record(
+    store: EventStore,
+    execution_id: str,
+) -> ExecutionRecord:
+    """Immutable per-execution projection of durable evidence (5-H)."""
+    history = replay(store)
+    attempts = next(
+        (
+            execution.attempts
+            for execution in history.executions
+            if execution.execution_id == execution_id
+        ),
+        (),
+    )
+    step_ids = {attempt.step_id for attempt in attempts if attempt.step_id}
+    scoped = [
+        event
+        for event in store.events()
+        if event.step_id in step_ids
+    ]
+    tools = tuple(
+        dict(event.payload)
+        for event in scoped
+        if event.event_type == TOOL_CALL
+    )
+    owner_refs = _unique_dicts(
+        event.payload["owner_ref"]
+        for event in scoped
+        if event.event_type == TOOL_CALL
+        and "owner_ref" in event.payload
+    )
+    backend_refs = _unique_dicts(
+        event.payload["backend_event_ref"]
+        for event in scoped
+        if "backend_event_ref" in event.payload
+    )
+    context_provenance = tuple(
+        dict(attempt.context_provenance)
+        for attempt in attempts
+        if attempt.context_provenance is not None
+    )
+    return ExecutionRecord(
+        record_version="5h.1",
+        projection_rule_version="v1",
+        execution_id=execution_id,
+        session_id=store.session_id,
+        initiator_ref=(
+            attempts[0].initiator_ref
+            if attempts and attempts[0].initiator_ref is not None
+            else None
+        ),
+        owner_refs=owner_refs,
+        attempts=attempts,
+        tools=tools,
+        events=tuple((event.seq, event.event_type) for event in scoped),
+        backend_refs=backend_refs,
+        context_provenance=context_provenance,
+    )
 
 
 def _finalize_step(builder: _StepBuilder) -> ReplayStep:
@@ -446,6 +554,7 @@ async def resume(
 
 
 __all__ = [
+    "ExecutionRecord",
     "TOOL_NOT_STARTED",
     "TOOL_OUTCOME_UNKNOWN",
     "ReplayHistory",
@@ -455,6 +564,7 @@ __all__ = [
     "ReplayToolResult",
     "ReplayTurn",
     "UnresolvedTool",
+    "build_execution_record",
     "find_unresolved_tools",
     "rebuild_session",
     "repair_interrupted_turn",

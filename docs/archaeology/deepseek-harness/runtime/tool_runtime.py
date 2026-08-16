@@ -13,7 +13,14 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any, Callable
 
 from events import TOOL_CALL, TOOL_RESULT, SessionEvent
-from extensions import BackendEventRef, BackendMetadata
+from extensions import (
+    ADAPTER_DERIVED,
+    BackendEventRef,
+    BackendMetadata,
+    InitiatorRef,
+    OwnerRef,
+)
+from initiator import current_initiator
 from turn_step import ExecutionContext
 
 ALLOW = "allow"
@@ -89,6 +96,13 @@ class ToolRuntime:
         self._cancelled.setdefault(call_id, asyncio.Event()).set()
 
     async def execute(self, call: ToolCall, ctx: ExecutionContext) -> ToolResult:
+        registration = self._tools.get(call.name)
+        initiator_ref = self._current_initiator_ref()
+        owner_ref = (
+            OwnerRef(owner_type="capability", owner_id=registration.owner)
+            if registration is not None
+            else None
+        )
         payload = {
             "call_id": call.call_id,
             "name": call.name,
@@ -96,6 +110,10 @@ class ToolRuntime:
             "root_call_id": call.root_call_id,
             "parent_call_id": call.parent_call_id,
         }
+        if initiator_ref is not None:
+            payload["initiator_ref"] = asdict(initiator_ref)
+        if owner_ref is not None:
+            payload["owner_ref"] = asdict(owner_ref)
         if call.backend_event_ref is not None:
             payload["backend_event_ref"] = asdict(call.backend_event_ref)
         if call.backend_metadata is not None:
@@ -111,7 +129,6 @@ class ToolRuntime:
             ),
         )
         ctx.step.tool_calls.append(call)
-        registration = self._tools.get(call.name)
         if registration is None:
             result = ToolResult(
                 call.call_id,
@@ -124,6 +141,16 @@ class ToolRuntime:
                 result = await self._waterfall(registration, call, ctx)
             finally:
                 self._cancelled.pop(call.call_id, None)
+        result_payload = {
+            "tool_call_id": result.tool_call_id,
+            "content": result.content,
+            "is_error": result.is_error,
+            "error_code": result.error_code,
+        }
+        if initiator_ref is not None:
+            result_payload["initiator_ref"] = asdict(initiator_ref)
+        if owner_ref is not None:
+            result_payload["owner_ref"] = asdict(owner_ref)
         ctx.store.append(
             SessionEvent(
                 0,
@@ -131,16 +158,18 @@ class ToolRuntime:
                 ctx.session.session_id,
                 turn_id=ctx.turn.turn_id,
                 step_id=ctx.step.step_id,
-                payload={
-                    "tool_call_id": result.tool_call_id,
-                    "content": result.content,
-                    "is_error": result.is_error,
-                    "error_code": result.error_code,
-                },
+                payload=result_payload,
                 source_event_seqs=(call_event.seq,),
             ),
         )
         return result
+
+    @staticmethod
+    def _current_initiator_ref() -> InitiatorRef | None:
+        initiator = current_initiator()
+        if initiator is None:
+            return None
+        return InitiatorRef(ref=initiator.agent_id, source=ADAPTER_DERIVED)
 
     async def _waterfall(
         self,

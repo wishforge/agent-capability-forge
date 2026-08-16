@@ -17,11 +17,41 @@ SYNTHETIC = "SYNTHETIC"
 LOSSY = "LOSSY"
 ADAPTER = "ADAPTER"
 BACKEND_SPECIFIC = "BACKEND_SPECIFIC"
+ADAPTER_DERIVED = "ADAPTER_DERIVED"
 
 RUNNING = "RUNNING"
 SUCCEEDED = "SUCCEEDED"
 FAILED = "FAILED"
 ABORTED = "ABORTED"
+
+
+@dataclass(frozen=True, slots=True)
+class InitiatorRef:
+    """Stable logical initiator reference; never a Python object.
+
+    Phase 5-H: the ref is the durable attribution identity. `source` records
+    that the ref is assigned by the Unified runtime/adapter overlay rather
+    than a backend-native identity. `parent_ref` is only written when real
+    parent/child evidence exists.
+    """
+
+    ref: str
+    source: str = ADAPTER_DERIVED
+    parent_ref: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerRef:
+    """Durable owner reference: owner_type + owner_id (never a runtime object).
+
+    Minimal types: capability / scope / effect. The current runtime derives
+    owner_ref from ToolRegistration.owner and treats it as a capability id;
+    that derivation is recorded in the assumptions doc, not claimed as a
+    backend-native fact.
+    """
+
+    owner_type: str
+    owner_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +113,7 @@ def utc_now() -> str:
 __all__ = [
     "ABORTED",
     "ADAPTER",
+    "ADAPTER_DERIVED",
     "BACKEND_SPECIFIC",
     "BackendEventRef",
     "BackendMetadata",
@@ -90,7 +121,9 @@ __all__ = [
     "Execution",
     "ExecutionAttempt",
     "FAILED",
+    "InitiatorRef",
     "LOSSY",
+    "OwnerRef",
     "RUNNING",
     "SUCCEEDED",
     "SYNTHETIC",

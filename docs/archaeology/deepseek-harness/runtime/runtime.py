@@ -39,12 +39,14 @@ from events import (
 )
 from extensions import (
     ABORTED,
+    ADAPTER_DERIVED,
     FAILED,
     RUNNING,
     SUCCEEDED,
     BackendMetadata,
     Execution,
     ExecutionAttempt,
+    InitiatorRef,
     utc_now,
 )
 from initiator import InitiatorContext, with_initiator
@@ -137,7 +139,7 @@ class AgentRuntime:
                         ),
                     )
                     tools = self.tools or self.tool_runtime.names()
-                    store.append(
+                    request_ev = store.append(
                         SessionEvent(
                             0,
                             AGENT_REQUEST,
@@ -152,6 +154,9 @@ class AgentRuntime:
                                     "deterministic-fake",
                                 ),
                                 "tools": tools,
+                                "initiator_ref": asdict(
+                                    self._initiator_ref(),
+                                ),
                             },
                         ),
                     )
@@ -170,7 +175,14 @@ class AgentRuntime:
                     while True:
                         chunk_seqs = []
                         tool_results = []
-                        attempt = self._start_attempt(step, reason=attempt_reason)
+                        attempt = self._start_attempt(
+                            step,
+                            reason=attempt_reason,
+                            context_provenance=self._build_context_provenance(
+                                request_ev.seq,
+                                current_input,
+                            ),
+                        )
                         attempt_ref = None
                         attempt_meta = None
                         try:
@@ -272,6 +284,9 @@ class AgentRuntime:
                                                     "call_id": evt.call_id,
                                                     "name": evt.name,
                                                     "arguments": evt.arguments,
+                                                    "initiator_ref": asdict(
+                                                        self._initiator_ref(),
+                                                    ),
                                                     **self._extension_payload(
                                                         evt,
                                                     ),
@@ -436,7 +451,13 @@ class AgentRuntime:
             payload["backend_metadata"] = asdict(meta)
         return payload
 
-    def _start_attempt(self, step, *, reason: str = "model_request") -> ExecutionAttempt:
+    def _start_attempt(
+        self,
+        step,
+        *,
+        reason: str = "model_request",
+        context_provenance: dict | None = None,
+    ) -> ExecutionAttempt:
         execution = self.executions.setdefault(
             step.step_id,
             Execution(step.step_id),
@@ -453,6 +474,18 @@ class AgentRuntime:
             started_at=started,
         )
         execution.attempts.append(attempt)
+        payload = {
+            "execution_id": attempt.execution_id,
+            "attempt_id": attempt.attempt_id,
+            "attempt_number": attempt.attempt_number,
+            "parent_execution_id": attempt.parent_execution_id,
+            "reason": attempt.reason,
+            "status": attempt.status,
+            "started_at": started,
+            "initiator_ref": asdict(self._initiator_ref()),
+        }
+        if context_provenance is not None:
+            payload["context_provenance"] = context_provenance
         self.session.store.append(
             SessionEvent(
                 0,
@@ -460,15 +493,7 @@ class AgentRuntime:
                 self.session.session_id,
                 turn_id=step.turn.turn_id,
                 step_id=step.step_id,
-                payload={
-                    "execution_id": attempt.execution_id,
-                    "attempt_id": attempt.attempt_id,
-                    "attempt_number": attempt.attempt_number,
-                    "parent_execution_id": attempt.parent_execution_id,
-                    "reason": attempt.reason,
-                    "status": attempt.status,
-                    "started_at": started,
-                },
+                payload=payload,
             ),
         )
         return attempt
@@ -505,6 +530,7 @@ class AgentRuntime:
             "status": ended.status,
             "started_at": ended.started_at,
             "ended_at": ended.ended_at,
+            "initiator_ref": asdict(self._initiator_ref()),
         }
         if error is not None:
             payload["error"] = error
@@ -532,6 +558,49 @@ class AgentRuntime:
             runtime_context=self.runtime_context,
             current_input=current_input,
         )
+
+    def _initiator_ref(self) -> InitiatorRef:
+        return InitiatorRef(
+            ref=self.initiator.agent_id,
+            source=ADAPTER_DERIVED,
+        )
+
+    def _build_context_provenance(
+        self,
+        request_ref: int,
+        current_input: str,
+    ) -> dict:
+        """Request-time context refs; never copies message bodies.
+
+        source_event_refs and surface_refs are the same seqs in this runtime
+        because surface nodes are event refs. system_prompt / runtime_context
+        have no durable snapshot yet, so quality stays PARTIAL.
+        """
+        store = self.session.store
+        surface_seqs = SurfaceProjection(store).active_seqs()
+        current_input_ref = None
+        if current_input:
+            current_input_ref = next(
+                (
+                    e.seq
+                    for e in reversed(store.events())
+                    if e.event_type == USER_MESSAGE
+                    and e.payload.get("content") == current_input
+                ),
+                None,
+            )
+        return {
+            "request_ref": request_ref,
+            "source_event_refs": list(surface_seqs),
+            "surface_refs": list(surface_seqs),
+            "current_input_ref": current_input_ref,
+            "runtime_context_ref": None,
+            "quality": "PARTIAL",
+            "missing_semantics": [
+                "SYSTEM_PROMPT_SNAPSHOT",
+                "RUNTIME_CONTEXT_SNAPSHOT",
+            ],
+        }
 
     @staticmethod
     def _record_or_validate_tool_result(ctx: ExecutionContext, evt) -> None:
@@ -561,6 +630,16 @@ class AgentRuntime:
             return
         if call_ev is None:
             raise RuntimeError(f"tool result without tool call: {evt.call_id}")
+        payload = {
+            "tool_call_id": evt.call_id,
+            "content": evt.content,
+            "is_error": True,
+            "error_code": evt.error_code or "UNKNOWN_TOOL",
+            **AgentRuntime._extension_payload(evt),
+        }
+        for key in ("initiator_ref", "owner_ref"):
+            if key in call_ev.payload:
+                payload[key] = call_ev.payload[key]
         ctx.store.append(
             SessionEvent(
                 0,
@@ -568,13 +647,7 @@ class AgentRuntime:
                 ctx.session.session_id,
                 turn_id=ctx.turn.turn_id,
                 step_id=ctx.step.step_id,
-                payload={
-                    "tool_call_id": evt.call_id,
-                    "content": evt.content,
-                    "is_error": True,
-                    "error_code": evt.error_code or "UNKNOWN_TOOL",
-                    **AgentRuntime._extension_payload(evt),
-                },
+                payload=payload,
                 source_event_seqs=(call_ev.seq,),
             ),
         )

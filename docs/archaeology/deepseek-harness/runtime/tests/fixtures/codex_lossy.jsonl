@@ -1,0 +1,8 @@
+{"timestamp":"2026-08-16T00:00:00.000Z","type":"session_meta","payload":{"session_id":"019edb00-0000-7000-8000-000000000002","id":"019edb00-0000-7000-8000-000000000002","timestamp":"2026-08-16T00:00:00.000Z","cwd":"/tmp","originator":"codex","cli_version":"0.0.0","source":"cli","model_provider":"test-provider"}}
+{"timestamp":"2026-08-16T00:00:00.001Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"查询库存。"}]}}
+{"timestamp":"2026-08-16T00:00:00.001Z","type":"event_msg","payload":{"type":"user_message","message":"查询库存。","kind":"plain"}}
+{"timestamp":"2026-08-16T00:00:00.002Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":200000}}
+{"timestamp":"2026-08-16T00:00:00.003Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"正在查询库存。"}],"phase":"commentary"}}
+{"timestamp":"2026-08-16T00:00:00.004Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-x","name":"inventory.lookup","input":"{\"sku\": \"A\"}"}}
+{"timestamp":"2026-08-16T00:00:00.005Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"完成。"}],"phase":"final_answer"}}
+{"timestamp":"2026-08-16T00:00:00.006Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"完成。"}}

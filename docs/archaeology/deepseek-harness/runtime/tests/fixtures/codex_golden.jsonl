@@ -1,0 +1,12 @@
+{"timestamp":"2026-08-16T00:00:00.000Z","type":"session_meta","payload":{"session_id":"019edb00-0000-7000-8000-000000000001","id":"019edb00-0000-7000-8000-000000000001","timestamp":"2026-08-16T00:00:00.000Z","cwd":"/tmp","originator":"codex","cli_version":"0.0.0","source":"cli","model_provider":"test-provider"}}
+{"timestamp":"2026-08-16T00:00:00.001Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"查询库存，如果不足则生成采购建议。"}]}}
+{"timestamp":"2026-08-16T00:00:00.001Z","type":"event_msg","payload":{"type":"user_message","message":"查询库存，如果不足则生成采购建议。","kind":"plain"}}
+{"timestamp":"2026-08-16T00:00:00.002Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":200000}}
+{"timestamp":"2026-08-16T00:00:00.003Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"正在查询库存。"}],"phase":"commentary"}}
+{"timestamp":"2026-08-16T00:00:00.004Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-1","name":"inventory.lookup","input":"{\"sku\": \"A\"}"}}
+{"timestamp":"2026-08-16T00:00:00.005Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","name":"inventory.lookup","output":"stock:5"}}
+{"timestamp":"2026-08-16T00:00:00.006Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"库存为 5，需要补货。"}],"phase":"commentary"}}
+{"timestamp":"2026-08-16T00:00:00.007Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-2","name":"procurement.suggest","input":"{\"sku\": \"A\", \"qty\": 10}"}}
+{"timestamp":"2026-08-16T00:00:00.008Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-2","name":"procurement.suggest","output":"suggestion:created"}}
+{"timestamp":"2026-08-16T00:00:00.009Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已完成：库存不足，采购建议已生成（10 件）。"}],"phase":"final_answer"}}
+{"timestamp":"2026-08-16T00:00:00.010Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"已完成：库存不足，采购建议已生成（10 件）。"}}

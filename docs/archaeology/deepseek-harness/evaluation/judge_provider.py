@@ -22,6 +22,7 @@ at runtime and never written into this repository.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
 import re
@@ -106,6 +107,7 @@ class JudgeProviderError(Exception):
         super().__init__(message)
         self.kind = kind
         self.cause = cause
+        self.evidence: dict | None = None
 
 
 def _deepseek_config() -> tuple[str, str, str]:
@@ -227,7 +229,13 @@ def _render_execution(record: Any) -> dict:
     return plain
 
 
-def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePromptTemplate) -> str:
+def _render_prompt(
+    jinput: LLMJudgeInput,
+    rubric: JudgeRubric,
+    template: JudgePromptTemplate,
+    *,
+    instructions: str | None = None,
+) -> str:
     assessment = assess_evidence(
         jinput.execution_record,
         jinput.task_specification,
@@ -276,37 +284,38 @@ def _render_prompt(jinput: LLMJudgeInput, rubric: JudgeRubric, template: JudgePr
         '"message": "...", "evidence_refs": [{"execution_id": "...", '
         '"step_id": "..."}]}]}'
     )
-    if template.prompt_ref.endswith(":C:v1"):
-        instructions = (
-            "You are an independent semantic judge. The JSON input includes "
-            "evidence_sufficiency and behavioral_constraints computed "
-            "deterministically, and both are authoritative: if "
-            "evidence_sufficiency.verdict is not SUFFICIENT, return "
-            "INCONCLUSIVE with LOW confidence; if any "
-            "behavioral_constraints entry has status FAIL, return FAIL "
-            "regardless of the final answer. condition_assessments are also "
-            "deterministic and authoritative: any VIOLATED condition forces "
-            "FAIL, any UNKNOWN condition forces INCONCLUSIVE, and neither may "
-            "be overridden. Judge semantic criteria "
-            "strictly from evidence actually present; never infer missing "
-            "facts."
-        )
-    elif template.prompt_ref.endswith(":A:v1"):
-        instructions = (
-            "You are an independent semantic judge. Judge the execution "
-            "strictly from the evidence in the JSON input below. Do not guess "
-            "or supply facts the record does not contain. If evidence is "
-            "missing, lossy, or insufficient for any required criterion, "
-            "return INCONCLUSIVE with LOW confidence."
-        )
-    else:
-        instructions = (
-            "Assess the provided execution record against the rubric. Base "
-            "every verdict on evidence that is actually present. Never infer "
-            "unshown facts. Mark INCONCLUSIVE with LOW confidence whenever the "
-            "evidence cannot support a definite verdict, including lossy or "
-            "missing context."
-        )
+    if instructions is None:
+        if template.prompt_ref.endswith(":C:v1"):
+            instructions = (
+                "You are an independent semantic judge. The JSON input includes "
+                "evidence_sufficiency and behavioral_constraints computed "
+                "deterministically, and both are authoritative: if "
+                "evidence_sufficiency.verdict is not SUFFICIENT, return "
+                "INCONCLUSIVE with LOW confidence; if any "
+                "behavioral_constraints entry has status FAIL, return FAIL "
+                "regardless of the final answer. condition_assessments are also "
+                "deterministic and authoritative: any VIOLATED condition forces "
+                "FAIL, any UNKNOWN condition forces INCONCLUSIVE, and neither may "
+                "be overridden. Judge semantic criteria "
+                "strictly from evidence actually present; never infer missing "
+                "facts."
+            )
+        elif template.prompt_ref.endswith(":A:v1"):
+            instructions = (
+                "You are an independent semantic judge. Judge the execution "
+                "strictly from the evidence in the JSON input below. Do not guess "
+                "or supply facts the record does not contain. If evidence is "
+                "missing, lossy, or insufficient for any required criterion, "
+                "return INCONCLUSIVE with LOW confidence."
+            )
+        else:
+            instructions = (
+                "Assess the provided execution record against the rubric. Base "
+                "every verdict on evidence that is actually present. Never infer "
+                "unshown facts. Mark INCONCLUSIVE with LOW confidence whenever the "
+                "evidence cannot support a definite verdict, including lossy or "
+                "missing context."
+            )
     return (
         f"{instructions}\n\nJSON input:\n{payload}\n\n"
         f'Return one valid JSON object exactly matching this shape:\n{schema}'
@@ -360,6 +369,57 @@ class DeepSeekJudgeProvider:
         self._client = client
         self.last_usage: dict | None = None
         self.last_payload: dict | None = None
+        self.last_prompt: str | None = None
+        self.last_prompt_id: str | None = None
+        self.last_request: dict | None = None
+        self.last_raw_content: str | None = None
+        self.last_raw_response: Any = None
+
+    def _evidence(
+        self,
+        *,
+        stage: str,
+        reason: str | None,
+        raw_payload: Any = None,
+        parsed: dict | None = None,
+    ) -> dict:
+        """JSON-safe diagnostic evidence; never contains credentials."""
+        return {
+            "provider": self.backend_ref,
+            "model": self.model,
+            "prompt_id": self.last_prompt_id,
+            "prompt_hash": hashlib.sha256(
+                (self.last_prompt or "").encode("utf-8")
+            ).hexdigest(),
+            "temperature": self.temperature,
+            "seed": self.seed,
+            "request_metadata": self.last_request,
+            "prompt": self.last_prompt,
+            "raw_response": self.last_raw_response,
+            "raw_content": self.last_raw_content,
+            "raw_payload": raw_payload,
+            "parsed": parsed,
+            "contract": {
+                "decision": "ACCEPT" if reason is None else "REJECT",
+                "reason": reason,
+                "stage": stage,
+            },
+        }
+
+    def _reject(self, message: str, *, payload: dict, parsed: dict) -> JudgeProviderError:
+        exc = JudgeProviderError(INVALID_OUTPUT, message)
+        exc.evidence = self._evidence(
+            stage="parse",
+            reason=message,
+            raw_payload=payload,
+            parsed=parsed,
+        )
+        return exc
+
+    def _reject_create(self, message: str) -> JudgeProviderError:
+        exc = JudgeProviderError(INVALID_OUTPUT, message)
+        exc.evidence = self._evidence(stage="create", reason=message)
+        return exc
 
     def _ensure_client(self) -> OpenAI:
         if self._client is None:
@@ -377,8 +437,10 @@ class DeepSeekJudgeProvider:
             )
         return self._client
 
-    def _create(self, prompt: str) -> dict:
+    def _create(self, prompt: str, prompt_id: str | None = None) -> dict:
         client = self._ensure_client()
+        self.last_prompt = prompt
+        self.last_prompt_id = prompt_id or self.last_prompt_id
         kwargs = dict(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -389,6 +451,14 @@ class DeepSeekJudgeProvider:
         )
         if self.seed is not None:
             kwargs["seed"] = self.seed
+        self.last_request = {
+            "model": self.model,
+            "response_format": kwargs["response_format"],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "timeout": self.timeout,
+            "seed": self.seed,
+        }
         try:
             response = client.chat.completions.create(**kwargs)
         except APITimeoutError as exc:
@@ -405,16 +475,18 @@ class DeepSeekJudgeProvider:
             raise JudgeProviderError(TRANSIENT, f"provider error: {exc}", exc) from exc
 
         self.last_usage = _usage_dict(response)
+        self.last_raw_response = _to_plain(response)
         content = response.choices[0].message.content or ""
+        self.last_raw_content = content
         match = re.search(r"\{.*\}", content, re.DOTALL)
         if match is None:
-            raise JudgeProviderError(INVALID_OUTPUT, "no JSON object in provider output")
+            raise self._reject_create("no JSON object in provider output")
         try:
             payload = json.loads(match.group(0))
         except json.JSONDecodeError as exc:
-            raise JudgeProviderError(INVALID_OUTPUT, f"malformed JSON: {exc}", exc) from exc
+            raise self._reject_create(f"malformed JSON: {exc}") from exc
         if not isinstance(payload, dict):
-            raise JudgeProviderError(INVALID_OUTPUT, "provider output is not a JSON object")
+            raise self._reject_create("provider output is not a JSON object")
         return payload
 
     def _parse(
@@ -427,25 +499,34 @@ class DeepSeekJudgeProvider:
         status = "INCONCLUSIVE" if payload.get("status") == UNKNOWN else payload.get("status")
         confidence = payload.get("confidence")
         score = payload.get("score")
+        parsed = {"status": status, "confidence": confidence, "score": score}
         if status not in _STATUSES:
-            raise JudgeProviderError(INVALID_OUTPUT, f"invalid status {status!r}")
+            raise self._reject(f"invalid status {status!r}", payload=payload, parsed=parsed)
         if confidence not in _CONFIDENCES:
-            raise JudgeProviderError(INVALID_OUTPUT, f"invalid confidence {confidence!r}")
+            raise self._reject(f"invalid confidence {confidence!r}", payload=payload, parsed=parsed)
         if status == PASS and confidence == LOW:
-            raise JudgeProviderError(INVALID_OUTPUT, "low-confidence PASS is forbidden")
+            raise self._reject(
+                "low-confidence PASS is forbidden",
+                payload=payload,
+                parsed=parsed,
+            )
         if status == INCONCLUSIVE and confidence == HIGH:
-            raise JudgeProviderError(INVALID_OUTPUT, "INCONCLUSIVE must not be HIGH confidence")
+            raise self._reject(
+                "INCONCLUSIVE must not be HIGH confidence",
+                payload=payload,
+                parsed=parsed,
+            )
         if score is not None and not isinstance(score, (int, float)):
-            raise JudgeProviderError(INVALID_OUTPUT, f"invalid score {score!r}")
+            raise self._reject(f"invalid score {score!r}", payload=payload, parsed=parsed)
         if score is not None and not (0.0 <= score <= 1.0):
-            raise JudgeProviderError(INVALID_OUTPUT, f"score out of range: {score!r}")
+            raise self._reject(f"score out of range: {score!r}", payload=payload, parsed=parsed)
         model_findings = payload.get("findings")
         if model_findings is not None and not isinstance(model_findings, list):
-            raise JudgeProviderError(INVALID_OUTPUT, "findings must be a list")
+            raise self._reject("findings must be a list", payload=payload, parsed=parsed)
         by_id: dict[str, dict] = {}
         for finding in model_findings or []:
             if not isinstance(finding, dict) or "criterion_id" not in finding:
-                raise JudgeProviderError(INVALID_OUTPUT, "malformed finding")
+                raise self._reject("malformed finding", payload=payload, parsed=parsed)
             by_id[finding["criterion_id"]] = finding
 
         findings: list[JudgeFinding] = []
@@ -455,9 +536,10 @@ class DeepSeekJudgeProvider:
             if finding_status == UNKNOWN:
                 finding_status = INCONCLUSIVE
             if finding_status not in _STATUSES:
-                raise JudgeProviderError(
-                    INVALID_OUTPUT,
+                raise self._reject(
                     f"invalid finding status {finding_status!r}",
+                    payload=payload,
+                    parsed=parsed,
                 )
             refs = tuple(
                 dict(ref)
@@ -492,24 +574,37 @@ class DeepSeekJudgeProvider:
         else:
             final_score = score
             final_confidence = confidence
-        return LLMJudgeResult(
-            judge_id=f"{_get(jinput.execution_record, 'execution_id')}:real:{uuid4().hex}",
-            status=overall,
-            score=final_score,
-            reasoning_summary=str(
-                payload.get("reasoning_summary") or f"real judge: {overall}",
-            ),
-            findings=tuple(findings),
-            evidence_refs=_dedupe_refs(
-                ref for finding in findings for ref in finding.evidence_refs
-            ),
-            confidence=final_confidence,
-            model_ref=f"{self.backend_ref}:{self.model}",
-            model_version="UNKNOWN",
-            prompt_ref=template.prompt_ref,
-            prompt_version=template.prompt_version,
-            rubric_ref={"rubric_id": rubric.rubric_id, "version": rubric.version},
-        )
+        try:
+            return LLMJudgeResult(
+                judge_id=f"{_get(jinput.execution_record, 'execution_id')}:real:{uuid4().hex}",
+                status=overall,
+                score=final_score,
+                reasoning_summary=str(
+                    payload.get("reasoning_summary") or f"real judge: {overall}",
+                ),
+                findings=tuple(findings),
+                evidence_refs=_dedupe_refs(
+                    ref for finding in findings for ref in finding.evidence_refs
+                ),
+                confidence=final_confidence,
+                model_ref=f"{self.backend_ref}:{self.model}",
+                model_version="UNKNOWN",
+                prompt_ref=template.prompt_ref,
+                prompt_version=template.prompt_version,
+                rubric_ref={"rubric_id": rubric.rubric_id, "version": rubric.version},
+            )
+        except ValueError as exc:
+            exc.evidence = self._evidence(
+                stage="parse",
+                reason=str(exc),
+                raw_payload=payload,
+                parsed={
+                    "status": overall,
+                    "confidence": final_confidence,
+                    "score": final_score,
+                },
+            )
+            raise
 
     def judge(
         self,
@@ -517,10 +612,16 @@ class DeepSeekJudgeProvider:
         rubric: JudgeRubric | None = None,
         *,
         prompt_key: str | None = None,
+        template: JudgePromptTemplate | None = None,
+        instructions: str | None = None,
     ) -> LLMJudgeResult:
         rubric = rubric or jinput.rubric
-        template = PROMPT_TEMPLATES[prompt_key or self.prompt_key]
-        payload = self._create(_render_prompt(jinput, rubric, template))
+        template = template or PROMPT_TEMPLATES[prompt_key or self.prompt_key]
+        self.last_prompt_id = template.prompt_ref
+        payload = self._create(
+            _render_prompt(jinput, rubric, template, instructions=instructions),
+            template.prompt_ref,
+        )
         self.last_payload = payload
         result = self._parse(jinput, rubric, payload, template)
         return contract_guard(jinput, result)

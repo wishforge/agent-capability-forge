@@ -40,6 +40,7 @@ from judge_provider import (  # noqa: E402
 from llm_judge import FAIL, INCONCLUSIVE, PASS, fake_judge  # noqa: E402
 
 ARTIFACTS = EVAL / "artifacts"
+DEBUG_DIR = ARTIFACTS / "provider-debug"
 SECOND_PROVIDER_NAME = "Model_Studio_Token_Plan_Personal"
 SECOND_MODEL = "qwen3.7-plus"
 BACKENDS = ("fake", "deepseek", "model_studio")
@@ -85,8 +86,21 @@ def _second_provider(prompt_key: str) -> DeepSeekJudgeProvider:
     )
 
 
-def _error_record(case_id: str, prompt_key: str, backend_ref: str, exc: Exception) -> dict:
-    return {
+def write_debug_evidence(evidence: dict, path: pathlib.Path) -> pathlib.Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _error_record(
+    case_id: str,
+    prompt_key: str,
+    backend_ref: str,
+    exc: Exception,
+    *,
+    provider: Any = None,
+) -> dict:
+    record = {
         "case_id": case_id,
         "prompt_key": prompt_key,
         "backend_ref": backend_ref,
@@ -96,6 +110,23 @@ def _error_record(case_id: str, prompt_key: str, backend_ref: str, exc: Exceptio
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    evidence = getattr(exc, "evidence", None)
+    if evidence is not None and provider is not None:
+        evidence = dict(evidence)
+        evidence.update(
+            case_id=case_id,
+            prompt_key=prompt_key,
+            timestamp=record["timestamp"],
+        )
+        path = write_debug_evidence(
+            evidence,
+            DEBUG_DIR / f"{case_id}-{backend_ref}-{prompt_key}.json",
+        )
+        try:
+            record["debug_artifact"] = str(path.relative_to(EVAL))
+        except ValueError:
+            record["debug_artifact"] = str(path)
+    return record
 
 
 def _run_leg(
@@ -126,7 +157,13 @@ def _run_leg(
                 raw_payload=getattr(provider, "last_payload", None),
             )
         except Exception as exc:  # noqa: BLE001 - provider failures are evidence
-            record = _error_record(case.case_id, prompt_key, backend_ref, exc)
+            record = _error_record(
+                case.case_id,
+                prompt_key,
+                backend_ref,
+                exc,
+                provider=provider,
+            )
         append_calibration_run(out44, record)
     for probe in PHASE6E_PROBES:
         try:
@@ -140,7 +177,13 @@ def _run_leg(
                 raw_payload=getattr(provider, "last_payload", None),
             )
         except Exception as exc:  # noqa: BLE001
-            record = _error_record(probe.case_id, prompt_key, backend_ref, exc)
+            record = _error_record(
+                probe.case_id,
+                prompt_key,
+                backend_ref,
+                exc,
+                provider=provider,
+            )
         append_calibration_run(outprobes, record)
 
 

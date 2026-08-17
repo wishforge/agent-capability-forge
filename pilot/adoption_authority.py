@@ -29,6 +29,13 @@ NON_PROMOTE_VALUES = {"HOLD", "REJECTED", "REJECT", "CANARY", "PENDING"}
 STORE_FILENAME = "adoption_store.json"
 
 
+def authority_id_for(candidate_id: str | None, candidate_version: str | None,
+                     decision_id: str | None) -> str:
+    """Deterministic content-bound authority id (no cryptographic issuer)."""
+    raw = f"{candidate_id}|{candidate_version}|{decision_id}"
+    return "auth-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def dir_digest(directory: Path) -> str:
     """sha256 over sorted relative paths + file bytes (same shape as harness)."""
     files = {
@@ -94,6 +101,13 @@ def violations_for_authority(
 
     cand_id = authority.get("candidate_id")
     cand_ver = authority.get("candidate_version")
+    if authority.get("authority_id") != authority_id_for(
+        cand_id, cand_ver, authority.get("promotion_decision_id")
+    ):
+        block(
+            "AUTHORITY_ID_MISMATCH",
+            "authority_id is not the deterministic producer id for this binding",
+        )
     decision = _decision(store, authority.get("promotion_decision_id"))
     if decision is None:
         block("MISSING_DECISION", f"decision={authority.get('promotion_decision_id')}")

@@ -40,6 +40,7 @@ import pilot.cost as cost_mod  # noqa: E402
 import pilot.generate as gen_mod  # noqa: E402
 import pilot.registry as registry  # noqa: E402
 import pilot.run_record as rr  # noqa: E402
+import pilot.adoption_authority_producer as producer  # noqa: E402
 
 
 def _now() -> str:
@@ -597,7 +598,15 @@ class Harness:
                 old_entry.unlink()
                 if old_artifact:
                     shutil.rmtree(old_artifact, ignore_errors=True)
-            entry = registry.promote("F+", name, cand, evaluation, self.registry_root)
+            issued = producer.issue_authority(
+                self.registry_root, cand, evaluation, confirm=confirm)
+            if issued["verdict"] != "AUTHORITY_ISSUED":
+                raise RuntimeError(
+                    "B3 authority issuance BLOCKED: "
+                    + json.dumps(issued["violations"], ensure_ascii=False))
+            entry = registry.promote(
+                "F+", name, cand, evaluation, self.registry_root,
+                adoption_authority=issued["authority"])
             (self.state / "b3_entry.json").write_text(
                 json.dumps({"name": name, "capability_id": entry["capability_id"]}, indent=2) + "\n")
         else:

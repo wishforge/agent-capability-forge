@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 import pytest  # noqa: E402
 
-from pilot.adoption_authority import dir_digest  # noqa: E402
+from pilot.adoption_authority import authority_id_for, dir_digest  # noqa: E402
 from pilot.registry import AdoptionBlocked, promote  # noqa: E402
 
 FAMILY = "F+"
@@ -101,7 +101,7 @@ def store(candidate: pathlib.Path) -> dict:
 @pytest.fixture
 def authority(candidate: pathlib.Path) -> dict:
     return {
-        "authority_id": "auth-1",
+        "authority_id": authority_id_for("cand-1", "v1", "dec-1"),
         "candidate_id": "cand-1",
         "candidate_version": "v1",
         "promotion_decision_id": "dec-1",
@@ -290,7 +290,11 @@ def test_existing_entry_different_binding_blocked(
     s["decisions"].append(second_decision)
     (registry_root / "adoption_store.json").write_text(json.dumps(s, indent=2))
     other = copy.deepcopy(authority)
-    other.update(promotion_decision_id="dec-2", issued_at="2026-08-17T02:00:00Z")
+    other.update(
+        promotion_decision_id="dec-2",
+        issued_at="2026-08-17T02:00:00Z",
+        authority_id=authority_id_for("cand-1", "v1", "dec-2"),
+    )
     with pytest.raises(AdoptionBlocked) as ei:
         promote(FAMILY, NAME, candidate, {"verdict": "PASS"}, registry_root,
                 adoption_authority=other)

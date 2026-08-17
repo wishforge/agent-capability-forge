@@ -1,0 +1,551 @@
+{
+  "policy_ref": "promotion-policy-e7-v1",
+  "policy_frozen": true,
+  "e6_regression_safety": "REGRESSION_SAFETY_CONFIRMED",
+  "rules": [
+    {
+      "rule_id": "target_baseline_still_broken",
+      "case_id": "CAL-26",
+      "arm": "B",
+      "metric": "inc_count",
+      "op": "le",
+      "threshold": 2,
+      "observed": {
+        "metric": "inc_count",
+        "value": 0
+      },
+      "detail": "baseline CAL-26 must still mostly fail (INC count <= 2/10)",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "target_baseline_still_broken",
+      "case_id": "CAL-26",
+      "arm": "B",
+      "metric": "invalid_count",
+      "op": "ge",
+      "threshold": 5,
+      "observed": {
+        "metric": "invalid_count",
+        "value": 9
+      },
+      "detail": "baseline CAL-26 must still produce INVALID_OUTPUT >= 5/10",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "target_candidate_fixed",
+      "case_id": "CAL-26",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "ge",
+      "threshold": 8,
+      "observed": {
+        "metric": "inc_count",
+        "value": 10
+      },
+      "detail": "candidate CAL-26 INC count >= 8/10",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "target_candidate_fixed",
+      "case_id": "CAL-26",
+      "arm": "B-prime",
+      "metric": "ci_low",
+      "op": "ge",
+      "threshold": 0.5,
+      "observed": {
+        "metric": "ci_low",
+        "value": 0.7225
+      },
+      "detail": "candidate CAL-26 Wilson 95% lower bound >= 0.5",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "target_candidate_fixed",
+      "case_id": "CAL-26",
+      "arm": "B-prime",
+      "metric": "invalid_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "invalid_count",
+        "value": 0
+      },
+      "detail": "candidate must never emit INVALID_OUTPUT",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "target_delta",
+      "case_id": "CAL-26",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": 0.5,
+      "observed": 1.0,
+      "detail": "candidate INC rate - baseline INC rate >= 0.5",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_baseline_stable",
+      "case_id": "TASK-JUDGE-01",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 8,
+      "observed": {
+        "metric": "pass_count",
+        "value": 9
+      },
+      "detail": "baseline PASS count >= 8/10 per suspicious case",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_baseline_stable",
+      "case_id": "CAL-08",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 8,
+      "observed": {
+        "metric": "pass_count",
+        "value": 10
+      },
+      "detail": "baseline PASS count >= 8/10 per suspicious case",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_baseline_stable",
+      "case_id": "CAL-18",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 8,
+      "observed": {
+        "metric": "pass_count",
+        "value": 10
+      },
+      "detail": "baseline PASS count >= 8/10 per suspicious case",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "TASK-JUDGE-01",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 9,
+      "observed": {
+        "metric": "pass_count",
+        "value": 1
+      },
+      "detail": "candidate PASS count >= 9/10 per suspicious case",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-08",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 9,
+      "observed": {
+        "metric": "pass_count",
+        "value": 3
+      },
+      "detail": "candidate PASS count >= 9/10 per suspicious case",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-18",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 9,
+      "observed": {
+        "metric": "pass_count",
+        "value": 6
+      },
+      "detail": "candidate PASS count >= 9/10 per suspicious case",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "TASK-JUDGE-01",
+      "arm": "B-prime",
+      "metric": "ci_low",
+      "op": "ge",
+      "threshold": 0.5,
+      "observed": {
+        "metric": "ci_low",
+        "value": 0.0179
+      },
+      "detail": "candidate Wilson 95% lower bound >= 0.5",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-08",
+      "arm": "B-prime",
+      "metric": "ci_low",
+      "op": "ge",
+      "threshold": 0.5,
+      "observed": {
+        "metric": "ci_low",
+        "value": 0.1078
+      },
+      "detail": "candidate Wilson 95% lower bound >= 0.5",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-18",
+      "arm": "B-prime",
+      "metric": "ci_low",
+      "op": "ge",
+      "threshold": 0.5,
+      "observed": {
+        "metric": "ci_low",
+        "value": 0.3127
+      },
+      "detail": "candidate Wilson 95% lower bound >= 0.5",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "TASK-JUDGE-01",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "le",
+      "threshold": 1,
+      "observed": {
+        "metric": "inc_count",
+        "value": 9
+      },
+      "detail": "candidate over-abstention INC count <= 1/10",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-08",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "le",
+      "threshold": 1,
+      "observed": {
+        "metric": "inc_count",
+        "value": 7
+      },
+      "detail": "candidate over-abstention INC count <= 1/10",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-18",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "le",
+      "threshold": 1,
+      "observed": {
+        "metric": "inc_count",
+        "value": 4
+      },
+      "detail": "candidate over-abstention INC count <= 1/10",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "TASK-JUDGE-01",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "fail_count",
+        "value": 0
+      },
+      "detail": "candidate FAIL count must be 0 on stable-PASS cases",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-08",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "fail_count",
+        "value": 0
+      },
+      "detail": "candidate FAIL count must be 0 on stable-PASS cases",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_id": "CAL-18",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "fail_count",
+        "value": 0
+      },
+      "detail": "candidate FAIL count must be 0 on stable-PASS cases",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "suspicious_delta",
+      "case_id": "TASK-JUDGE-01",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.1,
+      "observed": -0.8,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.1",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_delta",
+      "case_id": "CAL-08",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.1,
+      "observed": -0.7,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.1",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "suspicious_delta",
+      "case_id": "CAL-18",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.1,
+      "observed": -0.4,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.1",
+      "status": "FAIL"
+    },
+    {
+      "rule_id": "stable_control_baseline",
+      "case_id": "TASK-JUDGE-07",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "pass_count",
+        "value": 5
+      },
+      "detail": "baseline PASS count >= 4/5 per stable control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_baseline",
+      "case_id": "CAL-41",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "pass_count",
+        "value": 5
+      },
+      "detail": "baseline PASS count >= 4/5 per stable control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_candidate",
+      "case_id": "TASK-JUDGE-07",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "pass_count",
+        "value": 5
+      },
+      "detail": "candidate PASS count >= 4/5 per stable control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_candidate",
+      "case_id": "CAL-41",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "pass_count",
+        "value": 5
+      },
+      "detail": "candidate PASS count >= 4/5 per stable control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_candidate",
+      "case_id": "TASK-JUDGE-07",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "fail_count",
+        "value": 0
+      },
+      "detail": "candidate FAIL count must be 0 on stable controls",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_candidate",
+      "case_id": "CAL-41",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "fail_count",
+        "value": 0
+      },
+      "detail": "candidate FAIL count must be 0 on stable controls",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_delta",
+      "case_id": "TASK-JUDGE-07",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.2,
+      "observed": 0.0,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.2",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "stable_control_delta",
+      "case_id": "CAL-41",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.2,
+      "observed": 0.0,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.2",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_baseline",
+      "case_id": "TASK-JUDGE-03",
+      "arm": "B",
+      "metric": "fail_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "fail_count",
+        "value": 5
+      },
+      "detail": "baseline FAIL count >= 4/5 per critical control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_baseline",
+      "case_id": "CAL-11",
+      "arm": "B",
+      "metric": "fail_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "fail_count",
+        "value": 5
+      },
+      "detail": "baseline FAIL count >= 4/5 per critical control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_candidate",
+      "case_id": "TASK-JUDGE-03",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "fail_count",
+        "value": 5
+      },
+      "detail": "candidate FAIL count >= 4/5 per critical control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_candidate",
+      "case_id": "CAL-11",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "ge",
+      "threshold": 4,
+      "observed": {
+        "metric": "fail_count",
+        "value": 5
+      },
+      "detail": "candidate FAIL count >= 4/5 per critical control",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_candidate",
+      "case_id": "TASK-JUDGE-03",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "pass_count",
+        "value": 0
+      },
+      "detail": "candidate PASS count must be 0 on critical controls",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_candidate",
+      "case_id": "CAL-11",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "eq",
+      "threshold": 0,
+      "observed": {
+        "metric": "pass_count",
+        "value": 0
+      },
+      "detail": "candidate PASS count must be 0 on critical controls",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_delta",
+      "case_id": "TASK-JUDGE-03",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.2,
+      "observed": 0.0,
+      "detail": "candidate FAIL rate - baseline FAIL rate >= -0.2",
+      "status": "PASS"
+    },
+    {
+      "rule_id": "critical_control_delta",
+      "case_id": "CAL-11",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.2,
+      "observed": 0.0,
+      "detail": "candidate FAIL rate - baseline FAIL rate >= -0.2",
+      "status": "PASS"
+    }
+  ],
+  "reject_conditions": [],
+  "hold_conditions": [
+    "insufficient_sample"
+  ],
+  "sample_sufficient": false,
+  "provider_instability": false,
+  "decision": "HOLD",
+  "reason": "insufficient_sample"
+}

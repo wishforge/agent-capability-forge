@@ -41,6 +41,7 @@ import pilot.generate as gen_mod  # noqa: E402
 import pilot.registry as registry  # noqa: E402
 import pilot.run_record as rr  # noqa: E402
 import pilot.adoption_authority_producer as producer  # noqa: E402
+import pilot.runtime_adoption_guard as runtime_guard  # noqa: E402
 
 
 def _now() -> str:
@@ -607,6 +608,7 @@ class Harness:
             entry = registry.promote(
                 "F+", name, cand, evaluation, self.registry_root,
                 adoption_authority=issued["authority"])
+            runtime_guard.mark_promoted(self.registry_root, entry)
             (self.state / "b3_entry.json").write_text(
                 json.dumps({"name": name, "capability_id": entry["capability_id"]}, indent=2) + "\n")
         else:
@@ -715,10 +717,11 @@ class Harness:
                     rec["oracle"] = {"verdict": "ERROR", "reason": "codex exec failed",
                                      "stable": False, "runs": []}
             elif arm == "b3":
+                artifact_dir = Path(entry["artifact_dir"])
+                adopted = runtime_guard.adopt(self.registry_root, entry, artifact_dir)
                 out = run_dir / "output"
                 out.mkdir()
-                artifact_dir = Path(entry["artifact_dir"])
-                artifact_digest = _dir_digest(artifact_dir)
+                artifact_digest = adopted["artifact_digest"]
                 invoke = docker_launch(self.cfg["sandbox"]["image"], [
                     (artifact_dir, "/artifact", True),
                     (self._fixture(tid) / "input", "/input", True),

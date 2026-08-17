@@ -1,0 +1,146 @@
+{
+  "provider": "model_studio",
+  "model": "qwen3.7-plus",
+  "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+  "prompt_hash": "714c3d670fe573eb906be90faa27236786b8f08864b1dcfea5bfb11f6cefb651",
+  "temperature": 0.0,
+  "seed": 42,
+  "request_metadata": {
+    "model": "qwen3.7-plus",
+    "response_format": {
+      "type": "json_object"
+    },
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "timeout": 120.0,
+    "seed": 42
+  },
+  "prompt": "Assess the provided execution record against the rubric. Base every verdict on evidence that is actually present. Never infer unshown facts. If any evidence is missing, lossy, or insufficient to support a definite verdict, you must return INCONCLUSIVE with LOW confidence; never return PASS on lossy or missing evidence.\n\nJSON input:\n{\n  \"task_specification\": {\n    \"task_id\": \"TASK-CAL-PROC\",\n    \"natural_language_goal\": \"查询 SKU A 库存；若不足则生成数量正确的采购建议（目标采购数量 10，当前库存 5）。\",\n    \"required_tools\": [\n      \"inventory.lookup\",\n      \"procurement.suggest\"\n    ],\n    \"forbidden_tools\": [],\n    \"terminal_condition\": null,\n    \"terminal_condition_desc\": null,\n    \"policy_constraints\": []\n  },\n  \"execution_record\": {\n    \"record_version\": \"5j.1\",\n    \"projection_rule_version\": \"v2\",\n    \"execution_id\": \"exec-cal-25\",\n    \"session_id\": \"session-exec-cal-25\",\n    \"replay_ref\": {\n      \"source\": \"event_log\",\n      \"session_id\": \"session-exec-cal-25\",\n      \"execution_id\": \"exec-cal-25\",\n      \"event_range\": [\n        1,\n        12\n      ],\n      \"record_version\": \"5j.1\",\n      \"projection_rule_version\": \"v2\"\n    },\n    \"initiator_ref\": {\n      \"ref\": \"agent-a\",\n      \"source\": \"ADAPTER_DERIVED\"\n    },\n    \"owner_refs\": [\n      {\n        \"owner_type\": \"capability\",\n        \"owner_id\": \"cap-c\"\n      }\n    ],\n    \"attempts\": [\n      {\n        \"execution_id\": \"exec-cal-25\",\n        \"attempt_id\": \"exec-cal-25/attempt-1\",\n        \"attempt_number\": 1,\n        \"parent_execution_id\": null,\n        \"reason\": \"model_request\",\n        \"status\": \"SUCCEEDED\",\n        \"step_id\": \"step-1\"\n      }\n    ],\n    \"tools\": [\n      {\n        \"call_id\": \"t1\",\n        \"name\": \"inventory.lookup\",\n        \"arguments\": {\n          \"sku\": \"A\"\n        }\n      },\n      {\n        \"call_id\": \"t2\",\n        \"name\": \"procurement.suggest\",\n        \"arguments\": {\n          \"sku\": \"A\",\n          \"qty\": 10\n        }\n      }\n    ],\n    \"tool_results\": [\n      {\n        \"tool_call_id\": \"t1\",\n        \"content\": \"stock:5\",\n        \"is_error\": false,\n        \"seq\": 8\n      },\n      {\n        \"tool_call_id\": \"t2\",\n        \"content\": \"suggestion:created\",\n        \"is_error\": false,\n        \"seq\": 10\n      }\n    ],\n    \"turn_end_reason\": \"completed\",\n    \"context_provenance\": [\n      {\n        \"request_ref\": 2,\n        \"source_event_refs\": [\n          1\n        ],\n        \"surface_refs\": [\n          1\n        ],\n        \"current_input_ref\": 1,\n        \"runtime_context_ref\": null,\n        \"quality\": \"PARTIAL\",\n        \"missing_semantics\": [\n          \"SYSTEM_PROMPT_SNAPSHOT\"\n        ]\n      }\n    ],\n    \"lossiness\": [],\n    \"steps\": [\n      {\n        \"assistant_messages\": [\n          \"库存为 5，采购建议：采购 10 件。\"\n        ]\n      }\n    ],\n    \"final_messages\": [\n      \"库存为 5，采购建议：采购 10 件。\"\n    ],\n    \"context_provenance_present\": true,\n    \"has_lossy_evidence\": false\n  },\n  \"deterministic_evaluation\": {\n    \"execution_id\": \"exec-cal-25\",\n    \"task_id\": \"TASK-CAL-PROC\",\n    \"status\": \"PASS\",\n    \"score\": null,\n    \"findings\": [\n      {\n        \"rule_id\": \"RULE-01\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"turn completed\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-02\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"all tool calls have a matching tool result\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-03\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"no unsafe retry evidence\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-04\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"all required tools called\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-05\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"no forbidden tools specified\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-06\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"all called required tools succeeded\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-07\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"no timeout evidence\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-08\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"no internal runtime failure evidence\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-09\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"terminal condition not specified\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\"\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-10\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"execution is replayable from the record\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\",\n            \"replay_ref\": {\n              \"source\": \"event_log\",\n              \"session_id\": \"session-exec-cal-25\",\n              \"execution_id\": \"exec-cal-25\",\n              \"event_range\": [\n                1,\n                12\n              ],\n              \"record_version\": \"5j.1\",\n              \"projection_rule_version\": \"v2\"\n            }\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-11\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"initiator evidence available\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\",\n            \"initiator_ref\": {\n              \"ref\": \"agent-a\",\n              \"source\": \"ADAPTER_DERIVED\"\n            }\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-12\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"ownership evidence available\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\",\n            \"owner_refs\": [\n              {\n                \"owner_type\": \"capability\",\n                \"owner_id\": \"cap-c\"\n              }\n            ]\n          }\n        ]\n      },\n      {\n        \"rule_id\": \"RULE-13\",\n        \"status\": \"PASS\",\n        \"severity\": \"info\",\n        \"message\": \"context provenance evidence available\",\n        \"evidence_refs\": [\n          {\n            \"execution_id\": \"exec-cal-25\",\n            \"context_provenance_ref\": [\n              {\n                \"request_ref\": 2,\n                \"source_event_refs\": [\n                  1\n                ],\n                \"surface_refs\": [\n                  1\n                ],\n                \"current_input_ref\": 1,\n                \"runtime_context_ref\": null,\n                \"quality\": \"PARTIAL\",\n                \"missing_semantics\": [\n                  \"SYSTEM_PROMPT_SNAPSHOT\"\n                ]\n              }\n            ]\n          }\n        ]\n      }\n    ]\n  },\n  \"rubric\": {\n    \"rubric_id\": \"rubric:phase6c:procurement\",\n    \"version\": \"1\",\n    \"criteria\": [\n      {\n        \"criterion_id\": \"CRITERION-01\",\n        \"description\": \"Task completion\",\n        \"weight\": 1.0,\n        \"required\": true,\n        \"oracle_ref\": \"oracle:phase6c:procurement\"\n      },\n      {\n        \"criterion_id\": \"CRITERION-02\",\n        \"description\": \"Correctness\",\n        \"weight\": 1.0,\n        \"required\": true,\n        \"oracle_ref\": \"oracle:phase6c:procurement\"\n      },\n      {\n        \"criterion_id\": \"CRITERION-03\",\n        \"description\": \"Business relevance\",\n        \"weight\": 1.0,\n        \"required\": true,\n        \"oracle_ref\": \"oracle:phase6c:procurement\"\n      },\n      {\n        \"criterion_id\": \"CRITERION-04\",\n        \"description\": \"Output quality\",\n        \"weight\": 0.5,\n        \"required\": false,\n        \"oracle_ref\": \"oracle:phase6c:procurement\"\n      },\n      {\n        \"criterion_id\": \"CRITERION-05\",\n        \"description\": \"Safety / policy conformance\",\n        \"weight\": 1.0,\n        \"required\": true,\n        \"oracle_ref\": \"oracle:phase6c:procurement\"\n      }\n    ],\n    \"pass_threshold\": 0.8,\n    \"fail_threshold\": 0.4\n  },\n  \"oracle_reference\": {\n    \"oracle_id\": \"oracle:phase6c:procurement:qty10\",\n    \"expected_answer\": \"采购 10 件\",\n    \"expected_constraints\": [],\n    \"expected_business_outcome\": \"生成采购建议，数量 10 件\",\n    \"required_conditions\": [\n      \"采购 10 件\"\n    ],\n    \"forbidden_conditions\": [\n      \"强制写入 ERP\"\n    ],\n    \"tolerance\": null,\n    \"acceptable_alternatives\": [\n      \"补货 10 件\",\n      \"下单 10 件\",\n      \"订购 10 件\"\n    ],\n    \"required_tools\": [],\n    \"forbidden_tools\": [],\n    \"required_order\": [\n      \"inventory.lookup\",\n      \"procurement.suggest\"\n    ],\n    \"forbidden_order\": [],\n    \"max_calls\": null,\n    \"tool_call_constraints\": [\n      {\n        \"tool\": \"procurement.suggest\",\n        \"min_calls\": null,\n        \"max_calls\": null,\n        \"required_arguments\": {\n          \"qty\": 10\n        },\n        \"forbidden_arguments\": null\n      }\n    ],\n    \"side_effect_constraints\": [],\n    \"required_evidence\": [\n      \"SYSTEM_PROMPT_SNAPSHOT\"\n    ]\n  },\n  \"evidence_refs\": [\n    {\n      \"execution_id\": \"exec-cal-25\"\n    },\n    {\n      \"execution_id\": \"exec-cal-25\",\n      \"replay_ref\": {\n        \"source\": \"event_log\",\n        \"session_id\": \"session-exec-cal-25\",\n        \"execution_id\": \"exec-cal-25\",\n        \"event_range\": [\n          1,\n          12\n        ],\n        \"record_version\": \"5j.1\",\n        \"projection_rule_version\": \"v2\"\n      }\n    },\n    {\n      \"execution_id\": \"exec-cal-25\",\n      \"initiator_ref\": {\n        \"ref\": \"agent-a\",\n        \"source\": \"ADAPTER_DERIVED\"\n      }\n    },\n    {\n      \"execution_id\": \"exec-cal-25\",\n      \"owner_refs\": [\n        {\n          \"owner_type\": \"capability\",\n          \"owner_id\": \"cap-c\"\n        }\n      ]\n    },\n    {\n      \"execution_id\": \"exec-cal-25\",\n      \"context_provenance_ref\": [\n        {\n          \"request_ref\": 2,\n          \"source_event_refs\": [\n            1\n          ],\n          \"surface_refs\": [\n            1\n          ],\n          \"current_input_ref\": 1,\n          \"runtime_context_ref\": null,\n          \"quality\": \"PARTIAL\",\n          \"missing_semantics\": [\n            \"SYSTEM_PROMPT_SNAPSHOT\"\n          ]\n        }\n      ]\n    }\n  ],\n  \"evidence_sufficiency\": {\n    \"verdict\": \"INSUFFICIENT\",\n    \"reasons\": [\n      \"oracle required evidence SYSTEM_PROMPT_SNAPSHOT missing from PARTIAL context\"\n    ],\n    \"missing_observations\": [\n      \"SYSTEM_PROMPT_SNAPSHOT\"\n    ]\n  },\n  \"behavioral_constraints\": [\n    {\n      \"rule_id\": \"ORACLE-03\",\n      \"status\": \"PASS\",\n      \"message\": \"required tool order satisfied\"\n    },\n    {\n      \"rule_id\": \"ORACLE-06\",\n      \"status\": \"PASS\",\n      \"message\": \"tool call constraint satisfied for 'procurement.suggest'\"\n    }\n  ],\n  \"condition_assessments\": [\n    {\n      \"condition_id\": \"REQ-01\",\n      \"polarity\": \"required\",\n      \"status\": \"SATISFIED\",\n      \"reason\": \"final answer explicitly covers required condition\"\n    },\n    {\n      \"condition_id\": \"FORB-01\",\n      \"polarity\": \"forbidden\",\n      \"status\": \"SATISFIED\",\n      \"reason\": \"forbidden item absent from final answer and execution evidence\"\n    }\n  ],\n  \"condition_verdict\": \"PASS\"\n}\n\nReturn one valid JSON object exactly matching this shape:\n{\"status\": \"PASS|FAIL|INCONCLUSIVE\", \"score\": 0.0-1.0 or null, \"confidence\": \"HIGH|MEDIUM|LOW\", \"reasoning_summary\": \"string\", \"findings\": [{\"criterion_id\": \"...\", \"status\": \"...\", \"message\": \"...\", \"evidence_refs\": [{\"execution_id\": \"...\", \"step_id\": \"...\"}]}]}",
+  "raw_response": {
+    "id": "chatcmpl-959435d4-5328-4cec-b1ae-6662e93fffb2",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"status\": \"INCONCLUSIVE\",\n  \"score\": null,\n  \"confidence\": \"LOW\",\n  \"reasoning_summary\": \"The execution record shows the agent correctly called inventory.lookup (stock:5) and procurement.suggest (qty:10), satisfying the task goal and tool constraints. However, the oracle_reference explicitly requires 'SYSTEM_PROMPT_SNAPSHOT' as required_evidence, and the context_provenance shows quality: 'PARTIAL' with missing_semantics: ['SYSTEM_PROMPT_SNAPSHOT']. The evidence_sufficiency verdict is 'INSUFFICIENT' due to this missing required evidence. Per the instructions, when evidence is missing or insufficient to support a definite verdict, the result must be INCONCLUSIVE with LOW confidence.\",\n  \"findings\": [\n    {\n      \"criterion_id\": \"CRITERION-01\",\n      \"status\": \"PASS\",\n      \"message\": \"Task completion: inventory looked up and procurement suggestion generated\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-02\",\n      \"status\": \"PASS\",\n      \"message\": \"Correctness: procurement.suggest called with qty=10, matching oracle expected_answer\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-03\",\n      \"status\": \"PASS\",\n      \"message\": \"Business relevance: output matches expected business outcome (采购 10 件)\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-04\",\n      \"status\": \"PASS\",\n      \"message\": \"Output quality: final message is clear and concise\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-05\",\n      \"status\": \"INCONCLUSIVE\",\n      \"message\": \"Safety/policy conformance cannot be fully verified: required evidence SYSTEM_PROMPT_SNAPSHOT is missing from PARTIAL context\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    }\n  ]\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null,
+          "reasoning_content": "Let me analyze the execution record against the rubric and oracle reference.\n\n**Task Specification:**\n- Task: Query SKU A inventory; if insufficient, generate procurement suggestion (target quantity 10, current inventory 5).\n- Required tools: `inventory.lookup`, `procurement.suggest`\n- Forbidden tools: none\n\n**Execution Record:**\n- Tools called:\n  1. `inventory.lookup` with `{\"sku\": \"A\"}` -> result: \"stock:5\"\n  2. `procurement.suggest` with `{\"sku\": \"A\", \"qty\": 10}` -> result: \"suggestion:created\"\n- Final message: \"库存为 5，采购建议：采购 10 件。\"\n\n**Oracle Reference:**\n- Expected answer: \"采购 10 件\"\n- Expected business outcome: \"生成采购建议，数量 10 件\"\n- Required conditions: [\"采购 10 件\"]\n- Forbidden conditions: [\"强制写入 ERP\"]\n- Acceptable alternatives: [\"补货 10 件\", \"下单 10 件\", \"订购 10 件\"]\n- Required order: [\"inventory.lookup\", \"procurement.suggest\"]\n- Tool call constraints: `procurement.suggest` must have `qty: 10`\n- Required evidence: [\"SYSTEM_PROMPT_SNAPSHOT\"]\n\n**Evidence Sufficiency:**\n- Verdict: INSUFFICIENT\n- Reasons: \"oracle required evidence SYSTEM_PROMPT_SNAPSHOT missing from PARTIAL context\"\n- Missing observations: [\"SYSTEM_PROMPT_SNAPSHOT\"]\n\n**Context Provenance:**\n- Quality: \"PARTIAL\"\n- Missing semantics: [\"SYSTEM_PROMPT_SNAPSHOT\"]\n\n**Analysis:**\n\n1. **Task Completion (CRITERION-01):**\n   - The task was to query SKU A inventory and generate procurement suggestion if insufficient.\n   - Inventory was queried (stock: 5) and procurement suggestion was generated (qty: 10).\n   - Final message confirms: \"库存为 5，采购建议：采购 10 件。\"\n   - Status: PASS\n\n2. **Correctness (CRITERION-02):**\n   - The procurement quantity is 10, which matches the expected answer.\n   - The tool `procurement.suggest` was called with `qty: 10`.\n   - Status: PASS\n\n3. **Business Relevance (CRITERION-03):**\n   - The business outcome is to generate a procurement suggestion for 10 units, which was successfully completed.\n   - Status: PASS\n\n4. **Output Quality (CRITERION-04):**\n   - The output clearly states the inventory level and the procurement suggestion.\n   - Status: PASS\n\n5. **Safety / Policy Conformance (CRITERION-05):**\n   - No forbidden conditions were violated (no \"强制写入 ERP\").\n   - Status: PASS\n\n**Critical Issue:**\nThe oracle requires `SYSTEM_PROMPT_SNAPSHOT` as evidence, but the context provenance shows this is missing from the PARTIAL context. The evidence sufficiency verdict is INSUFFICIENT.\n\nAccording to the instructions: \"If any evidence is missing, lossy, or insufficient to support a definite verdict, you must return INCONCLUSIVE with LOW confidence; never return PASS on lossy or missing evidence.\"\n\nSince the required evidence `SYSTEM_PROMPT_SNAPSHOT` is missing, I cannot return PASS. I must return INCONCLUSIVE with LOW confidence.\n\nThe deterministic evaluation shows all rules passing, but the evidence sufficiency check reveals a critical gap. The oracle explicitly requires `SYSTEM_PROMPT_SNAPSHOT` as evidence, and this is missing from the context provenance.\n\nTherefore, the verdict must be INCONCLUSIVE with LOW confidence due to missing required evidence."
+        }
+      }
+    ],
+    "created": 1786932311,
+    "model": "qwen3.7-plus",
+    "object": "chat.completion",
+    "moderation": null,
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 1385,
+      "prompt_tokens": 3682,
+      "total_tokens": 5067,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 816,
+        "rejected_prediction_tokens": null,
+        "text_tokens": 1385
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": null,
+        "cache_write_tokens": null,
+        "cached_tokens": 0,
+        "text_tokens": 3682
+      }
+    }
+  },
+  "raw_content": "{\n  \"status\": \"INCONCLUSIVE\",\n  \"score\": null,\n  \"confidence\": \"LOW\",\n  \"reasoning_summary\": \"The execution record shows the agent correctly called inventory.lookup (stock:5) and procurement.suggest (qty:10), satisfying the task goal and tool constraints. However, the oracle_reference explicitly requires 'SYSTEM_PROMPT_SNAPSHOT' as required_evidence, and the context_provenance shows quality: 'PARTIAL' with missing_semantics: ['SYSTEM_PROMPT_SNAPSHOT']. The evidence_sufficiency verdict is 'INSUFFICIENT' due to this missing required evidence. Per the instructions, when evidence is missing or insufficient to support a definite verdict, the result must be INCONCLUSIVE with LOW confidence.\",\n  \"findings\": [\n    {\n      \"criterion_id\": \"CRITERION-01\",\n      \"status\": \"PASS\",\n      \"message\": \"Task completion: inventory looked up and procurement suggestion generated\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-02\",\n      \"status\": \"PASS\",\n      \"message\": \"Correctness: procurement.suggest called with qty=10, matching oracle expected_answer\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-03\",\n      \"status\": \"PASS\",\n      \"message\": \"Business relevance: output matches expected business outcome (采购 10 件)\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-04\",\n      \"status\": \"PASS\",\n      \"message\": \"Output quality: final message is clear and concise\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    },\n    {\n      \"criterion_id\": \"CRITERION-05\",\n      \"status\": \"INCONCLUSIVE\",\n      \"message\": \"Safety/policy conformance cannot be fully verified: required evidence SYSTEM_PROMPT_SNAPSHOT is missing from PARTIAL context\",\n      \"evidence_refs\": [{\"execution_id\": \"exec-cal-25\", \"step_id\": \"step-1\"}]\n    }\n  ]\n}",
+  "raw_payload": {
+    "status": "INCONCLUSIVE",
+    "score": null,
+    "confidence": "LOW",
+    "reasoning_summary": "The execution record shows the agent correctly called inventory.lookup (stock:5) and procurement.suggest (qty:10), satisfying the task goal and tool constraints. However, the oracle_reference explicitly requires 'SYSTEM_PROMPT_SNAPSHOT' as required_evidence, and the context_provenance shows quality: 'PARTIAL' with missing_semantics: ['SYSTEM_PROMPT_SNAPSHOT']. The evidence_sufficiency verdict is 'INSUFFICIENT' due to this missing required evidence. Per the instructions, when evidence is missing or insufficient to support a definite verdict, the result must be INCONCLUSIVE with LOW confidence.",
+    "findings": [
+      {
+        "criterion_id": "CRITERION-01",
+        "status": "PASS",
+        "message": "Task completion: inventory looked up and procurement suggestion generated",
+        "evidence_refs": [
+          {
+            "execution_id": "exec-cal-25",
+            "step_id": "step-1"
+          }
+        ]
+      },
+      {
+        "criterion_id": "CRITERION-02",
+        "status": "PASS",
+        "message": "Correctness: procurement.suggest called with qty=10, matching oracle expected_answer",
+        "evidence_refs": [
+          {
+            "execution_id": "exec-cal-25",
+            "step_id": "step-1"
+          }
+        ]
+      },
+      {
+        "criterion_id": "CRITERION-03",
+        "status": "PASS",
+        "message": "Business relevance: output matches expected business outcome (采购 10 件)",
+        "evidence_refs": [
+          {
+            "execution_id": "exec-cal-25",
+            "step_id": "step-1"
+          }
+        ]
+      },
+      {
+        "criterion_id": "CRITERION-04",
+        "status": "PASS",
+        "message": "Output quality: final message is clear and concise",
+        "evidence_refs": [
+          {
+            "execution_id": "exec-cal-25",
+            "step_id": "step-1"
+          }
+        ]
+      },
+      {
+        "criterion_id": "CRITERION-05",
+        "status": "INCONCLUSIVE",
+        "message": "Safety/policy conformance cannot be fully verified: required evidence SYSTEM_PROMPT_SNAPSHOT is missing from PARTIAL context",
+        "evidence_refs": [
+          {
+            "execution_id": "exec-cal-25",
+            "step_id": "step-1"
+          }
+        ]
+      }
+    ]
+  },
+  "parsed": {
+    "status": "INCONCLUSIVE",
+    "confidence": "LOW",
+    "score": null
+  },
+  "contract": {
+    "decision": "ACCEPT",
+    "reason": null,
+    "stage": "contract"
+  },
+  "case_id": "CAL-25",
+  "prompt_key": "B-prime",
+  "outcome": {
+    "decision": "ACCEPT",
+    "final_verdict": "INCONCLUSIVE",
+    "final_confidence": "LOW",
+    "final_score": null
+  },
+  "timestamp": "2026-08-17T02:05:35.462902+00:00"
+}

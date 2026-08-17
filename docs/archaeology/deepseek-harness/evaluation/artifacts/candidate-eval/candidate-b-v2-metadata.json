@@ -1,0 +1,61 @@
+{
+  "candidate_id": "prompt-b-v2-candidate-1",
+  "baseline_prompt_id": "prompt:phase6b:judge:B:v1",
+  "candidate_prompt_id": "prompt:phase6b:judge:B-prime:v1",
+  "baseline_prompt_hash": "5227b2510ba82098878c64699847a2a9e1d66cb4f92364445e0b150088922f33",
+  "candidate_prompt_hash": "6838d0b012b82005810adac68809371ed3459caf9076dad4403f16ad5d244749",
+  "dataset_id": "calibration:phase6d:procurement",
+  "dataset_version": "2",
+  "git_commit": "8bdc28fad31f171dba9612f3bd93d8cc60ec4ddc",
+  "model": "qwen3.7-plus",
+  "temperature": 0.0,
+  "seed": 42,
+  "max_tokens": 8192,
+  "response_format": {
+    "type": "json_object"
+  },
+  "wording_diff": {
+    "baseline_last_sentence": "Mark INCONCLUSIVE with LOW confidence whenever the evidence cannot support a definite verdict, including lossy or missing context.",
+    "candidate_last_sentence": "If any evidence is missing, lossy, or insufficient to support a definite verdict, you must return INCONCLUSIVE with LOW confidence; never return PASS on lossy or missing evidence.",
+    "rest_identical": true
+  },
+  "unchanged": [
+    "rubric",
+    "expected_semantics",
+    "provider",
+    "parser",
+    "contract",
+    "retry"
+  ],
+  "case_sets": {
+    "targeted": [
+      "CAL-26"
+    ],
+    "regression": [
+      "TASK-JUDGE-04",
+      "CAL-15",
+      "CAL-16",
+      "CAL-17",
+      "CAL-25",
+      "CAL-26",
+      "CAL-27",
+      "CAL-32",
+      "CAL-36",
+      "CAL-37",
+      "CAL-38",
+      "CAL-40",
+      "TASK-JUDGE-01",
+      "TASK-JUDGE-07",
+      "CAL-08",
+      "CAL-18",
+      "CAL-19",
+      "CAL-28",
+      "CAL-41",
+      "TASK-JUDGE-03",
+      "CAL-11",
+      "CAL-20",
+      "CAL-30",
+      "CAL-44"
+    ]
+  }
+}

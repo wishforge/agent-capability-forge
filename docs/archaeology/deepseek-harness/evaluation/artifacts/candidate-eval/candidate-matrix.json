@@ -1,0 +1,1327 @@
+{
+  "candidate_id": "prompt-b-v2-candidate-1",
+  "provenance": {
+    "dataset_id": "calibration:phase6d:procurement",
+    "dataset_version": "2",
+    "git_commit": "8bdc28fad31f171dba9612f3bd93d8cc60ec4ddc",
+    "baseline_prompt_hash": "5227b2510ba82098878c64699847a2a9e1d66cb4f92364445e0b150088922f33",
+    "candidate_prompt_hash": "6838d0b012b82005810adac68809371ed3459caf9076dad4403f16ad5d244749",
+    "model": "qwen3.7-plus",
+    "temperature": 0.0,
+    "seed": 42
+  },
+  "targeted_cal26": [
+    {
+      "case_id": "CAL-26",
+      "prompt_key": "B",
+      "prompt_id": "prompt:phase6b:judge:B:v1",
+      "prompt_hash": "5227b2510ba82098878c64699847a2a9e1d66cb4f92364445e0b150088922f33",
+      "attempt": 1,
+      "timestamp": "2026-08-17T01:53:14.193347+00:00",
+      "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-targeted-r1.json",
+      "outcome": {
+        "decision": "REJECT",
+        "error_kind": "INVALID_OUTPUT",
+        "error": "low-confidence PASS is forbidden"
+      },
+      "contract": {
+        "decision": "REJECT",
+        "reason": "low-confidence PASS is forbidden",
+        "stage": "parse"
+      }
+    },
+    {
+      "case_id": "CAL-26",
+      "prompt_key": "B",
+      "prompt_id": "prompt:phase6b:judge:B:v1",
+      "prompt_hash": "5227b2510ba82098878c64699847a2a9e1d66cb4f92364445e0b150088922f33",
+      "attempt": 2,
+      "timestamp": "2026-08-17T01:53:55.822726+00:00",
+      "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-targeted-r2.json",
+      "outcome": {
+        "decision": "REJECT",
+        "error_kind": "INVALID_OUTPUT",
+        "error": "low-confidence PASS is forbidden"
+      },
+      "contract": {
+        "decision": "REJECT",
+        "reason": "low-confidence PASS is forbidden",
+        "stage": "parse"
+      }
+    },
+    {
+      "case_id": "CAL-26",
+      "prompt_key": "B",
+      "prompt_id": "prompt:phase6b:judge:B:v1",
+      "prompt_hash": "5227b2510ba82098878c64699847a2a9e1d66cb4f92364445e0b150088922f33",
+      "attempt": 3,
+      "timestamp": "2026-08-17T01:54:28.940955+00:00",
+      "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-targeted-r3.json",
+      "outcome": {
+        "decision": "REJECT",
+        "error_kind": "INVALID_OUTPUT",
+        "error": "low-confidence PASS is forbidden"
+      },
+      "contract": {
+        "decision": "REJECT",
+        "reason": "low-confidence PASS is forbidden",
+        "stage": "parse"
+      }
+    },
+    {
+      "case_id": "CAL-26",
+      "prompt_key": "B-prime",
+      "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+      "prompt_hash": "6838d0b012b82005810adac68809371ed3459caf9076dad4403f16ad5d244749",
+      "attempt": 1,
+      "timestamp": "2026-08-17T01:54:52.752278+00:00",
+      "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-prime-targeted-r1.json",
+      "outcome": {
+        "decision": "ACCEPT",
+        "final_verdict": "INCONCLUSIVE",
+        "final_confidence": "LOW",
+        "final_score": null
+      },
+      "contract": {
+        "decision": "ACCEPT",
+        "reason": null,
+        "stage": "contract"
+      }
+    },
+    {
+      "case_id": "CAL-26",
+      "prompt_key": "B-prime",
+      "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+      "prompt_hash": "6838d0b012b82005810adac68809371ed3459caf9076dad4403f16ad5d244749",
+      "attempt": 2,
+      "timestamp": "2026-08-17T01:55:20.587624+00:00",
+      "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-prime-targeted-r2.json",
+      "outcome": {
+        "decision": "ACCEPT",
+        "final_verdict": "INCONCLUSIVE",
+        "final_confidence": "LOW",
+        "final_score": null
+      },
+      "contract": {
+        "decision": "ACCEPT",
+        "reason": null,
+        "stage": "contract"
+      }
+    },
+    {
+      "case_id": "CAL-26",
+      "prompt_key": "B-prime",
+      "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+      "prompt_hash": "6838d0b012b82005810adac68809371ed3459caf9076dad4403f16ad5d244749",
+      "attempt": 3,
+      "timestamp": "2026-08-17T01:55:44.624143+00:00",
+      "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-prime-targeted-r3.json",
+      "outcome": {
+        "decision": "ACCEPT",
+        "final_verdict": "INCONCLUSIVE",
+        "final_confidence": "LOW",
+        "final_score": null
+      },
+      "contract": {
+        "decision": "ACCEPT",
+        "reason": null,
+        "stage": "contract"
+      }
+    }
+  ],
+  "matrix": [
+    {
+      "case_id": "TASK-JUDGE-04",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "TASK-JUDGE-04",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "90c3e41d6fc42d72b0c8ce7ac05223664afb98f550e1f91e87b801cbd226e50f",
+        "attempt": 1,
+        "timestamp": "2026-08-17T01:56:11.646138+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-04-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "TASK-JUDGE-04",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "6a29ab515321b30cf682a4067f532c327929f0afee652f20585dd6a6f6f90d9d",
+        "attempt": 1,
+        "timestamp": "2026-08-17T01:56:33.818773+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-04-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-15",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-15",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "6f203b74beec57ca5849bbac8264892ce1c7d67de0f786c294544121d8c91407",
+        "attempt": 1,
+        "timestamp": "2026-08-17T01:58:33.832188+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-15-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "REJECT",
+          "error_kind": "TIMEOUT",
+          "error": "provider timeout: Request timed out."
+        },
+        "contract": {
+          "decision": "REJECT",
+          "reason": "provider timeout: Request timed out.",
+          "stage": "unknown"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-15",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "96f58d47ff02703c570329594fe20c9ee45492b18ccdecff575bda647a66f373",
+        "attempt": 1,
+        "timestamp": "2026-08-17T01:59:08.809911+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-15-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": true,
+      "change_type": "UNCLASSIFIED",
+      "reason": "baseline provider error TIMEOUT; candidate ACCEPT(INCONCLUSIVE/LOW/None)"
+    },
+    {
+      "case_id": "CAL-16",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-16",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "980b1d6ec8a681d7a56073d42f3704593bdd3d0196446644842667ca6f0c7a9f",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:01:08.834152+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-16-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "REJECT",
+          "error_kind": "TIMEOUT",
+          "error": "provider timeout: Request timed out."
+        },
+        "contract": {
+          "decision": "REJECT",
+          "reason": "provider timeout: Request timed out.",
+          "stage": "unknown"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-16",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "4ab6f71d9599de0fff34209d16ca77750449ca15c34610ff8c553f1adc53d57b",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:01:32.104300+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-16-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": true,
+      "change_type": "UNCLASSIFIED",
+      "reason": "baseline provider error TIMEOUT; candidate ACCEPT(INCONCLUSIVE/LOW/None)"
+    },
+    {
+      "case_id": "CAL-17",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-17",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "d44d1087b987dc0289c8241f3d517b17648c5951627858f00a9683e676aa5db0",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:02:24.909324+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-17-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-17",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "ad6f1c78c838ab503b1fd6b250bcf562d5608ed0bcab4b3ce6a2ad5b44ef4a15",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:03:10.407942+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-17-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-25",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-25",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "e13fd03667820cbdd323ea77d95c9d875c852a37b3c4d572364a851a34cc62b3",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:05:10.425392+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-25-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "REJECT",
+          "error_kind": "TIMEOUT",
+          "error": "provider timeout: Request timed out."
+        },
+        "contract": {
+          "decision": "REJECT",
+          "reason": "provider timeout: Request timed out.",
+          "stage": "unknown"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-25",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "714c3d670fe573eb906be90faa27236786b8f08864b1dcfea5bfb11f6cefb651",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:05:35.462902+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-25-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": true,
+      "change_type": "UNCLASSIFIED",
+      "reason": "baseline provider error TIMEOUT; candidate ACCEPT(INCONCLUSIVE/LOW/None)"
+    },
+    {
+      "case_id": "CAL-26",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-26",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "5227b2510ba82098878c64699847a2a9e1d66cb4f92364445e0b150088922f33",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:06:18.005448+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "REJECT",
+          "error_kind": "INVALID_OUTPUT",
+          "error": "low-confidence PASS is forbidden"
+        },
+        "contract": {
+          "decision": "REJECT",
+          "reason": "low-confidence PASS is forbidden",
+          "stage": "parse"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-26",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "6838d0b012b82005810adac68809371ed3459caf9076dad4403f16ad5d244749",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:06:39.360510+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-26-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": true,
+      "change_type": "IMPROVEMENT",
+      "reason": "baseline REJECT(INVALID_OUTPUT) -> candidate ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-27",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-27",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "63017b873ce3da2541be99c5904652df067d818f1b797725be75775749c7a5d0",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:07:18.741784+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-27-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-27",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "2ededefa83352828d3250427e49ed3015aa6207f2a180eb7f36911235985adbc",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:07:42.740041+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-27-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-32",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-32",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "0f4c8ede2f41f1ed16169213b8ea9bdaaed94b42b2f4cbf5b00568cba8f7699c",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:08:08.918560+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-32-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-32",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "5db3f293a54ebf4dca479888992f4a032dd46b09b6dac3db63bdb1cefe382814",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:10:08.935570+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-32-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "REJECT",
+          "error_kind": "TIMEOUT",
+          "error": "provider timeout: Request timed out."
+        },
+        "contract": {
+          "decision": "REJECT",
+          "reason": "provider timeout: Request timed out.",
+          "stage": "unknown"
+        }
+      },
+      "changed": true,
+      "change_type": "UNCLASSIFIED",
+      "reason": "candidate provider error TIMEOUT; baseline ACCEPT(INCONCLUSIVE/LOW/None)"
+    },
+    {
+      "case_id": "CAL-36",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-36",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "eff95cfa446e3794cbdadde6e3bce7b628f12cb86e46923ff9db86e8c979b380",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:11:00.438809+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-36-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-36",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "04a383357486d68cd54d4c55faaf1c065503fa43c2b485505befb4d783b521fc",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:11:27.258724+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-36-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-37",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-37",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "e7f640ba02f77e7089e9299b1119936318a3772fe4ab6a0dcad041a66f3b4ad9",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:12:41.381877+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-37-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-37",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "8dc5325bc532a5a717bb2fd7256b7e67c334eeb010bdce120253a98a1aece2e9",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:13:09.674196+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-37-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-38",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-38",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "393f32e11db53396d5c9d684a744ce96cedae6614de6e26564b2b305c8a32e70",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:13:37.334504+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-38-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-38",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "e312ef1942eca68d5c43e64dd4d0f4b07d39bdd4dc4afb86a3cd7d2b5651fde8",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:14:01.027760+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-38-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "CAL-40",
+      "expected_status": "INCONCLUSIVE",
+      "baseline": {
+        "case_id": "CAL-40",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "2009223b5683d334dc5d222f9cefdfec17729ef4798a4098d3103748643cdb7c",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:14:47.096079+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-40-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-40",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "103974aa427e187d0f9f94e8203d1d39a1c60f8d75f499bb37c2c735f4449381",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:15:18.438054+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-40-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "INCONCLUSIVE",
+          "final_confidence": "LOW",
+          "final_score": null
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT INCONCLUSIVE"
+    },
+    {
+      "case_id": "TASK-JUDGE-01",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "TASK-JUDGE-01",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "7dd393bf4c1b7a6717f56974c47eedefd97acc8632ce424cf2b0102d0aeaa9d8",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:15:37.548206+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-01-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "TASK-JUDGE-01",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "1fbc912232605b88300b7219dce64c47a2f335822a8aeec9d86e0179e4ea205f",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:16:13.067474+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-01-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "TASK-JUDGE-07",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "TASK-JUDGE-07",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "d295363b9c6a9717fed01aa0d1da63bec2249506923a0a3131db79b56c2f4b67",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:16:36.565574+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-07-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "TASK-JUDGE-07",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "461895d6c4ef742613af4782d8799ba52f52c00a2f242ac3a898d812e701f827",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:17:00.588218+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-07-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "CAL-08",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "CAL-08",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "4a1f9b2b48dd155e2b86b38aa281c2dc3af54bab544362b9624aba5b2aaaa04d",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:17:17.380730+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-08-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-08",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "244988cc93ad344c85ccebb535014b7027c73ab3284f67da57950d3ec2e5991c",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:17:37.874194+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-08-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "CAL-18",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "CAL-18",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "4b9ee18fd2b35bbc00e62c3d9f888540c28276d095c8d148f208606d286eeecf",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:18:08.985236+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-18-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-18",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "2dc8d2e5c713f64b18176e1d9b8dcb62f4b195e8dcbd7d59a652e51e50856837",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:18:36.687526+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-18-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "CAL-19",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "CAL-19",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "36395e24cbae5516457beac96c9d9f03e604c1241e13f4abf817b1cd13f21cad",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:18:59.933491+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-19-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-19",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "0944d3c2d5858fa1259aa813ed62853c3278bb7323ad575ecbfa61264dbbb381",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:19:25.172725+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-19-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "CAL-28",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "CAL-28",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "45438a6138bb25089bd07d9b32e78b9a21b77ad4d8ca0c86a7b96be751e0540d",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:19:50.061981+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-28-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-28",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "52a02e711150018b409727fceaf906cdc0e4562f24e53ebc406e7c0380358335",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:20:15.569175+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-28-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "CAL-41",
+      "expected_status": "PASS",
+      "baseline": {
+        "case_id": "CAL-41",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "5074062a037cf757a413f6ce5d557bf861736f0b87be226e5afac4631170023c",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:20:41.769515+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-41-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-41",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "ce76fa8de21d67c9262c51ecc6a4362520486c56d4e8ffd50662c6f5750515fd",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:21:13.614064+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-41-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "PASS",
+          "final_confidence": "HIGH",
+          "final_score": 1.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT PASS"
+    },
+    {
+      "case_id": "TASK-JUDGE-03",
+      "expected_status": "FAIL",
+      "baseline": {
+        "case_id": "TASK-JUDGE-03",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "2bf827fe6d19a597e1dcfab566c088b5f5eabedc3a828a8690106ec4badd8a0f",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:22:05.683143+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-03-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "TASK-JUDGE-03",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "fe74f85ea8bf65770a773d7e71919ada8d1e492185add9b0b37b7b204e2c7f7b",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:23:05.076731+00:00",
+        "artifact": "artifacts/candidate-eval/TASK-JUDGE-03-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT FAIL"
+    },
+    {
+      "case_id": "CAL-11",
+      "expected_status": "FAIL",
+      "baseline": {
+        "case_id": "CAL-11",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "9408a45b8fd1e7c856dbfd56ccc05f91963a86420d22ebff0d22e50aa22ca45d",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:23:36.310266+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-11-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-11",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "6be3c9bf24351208d7ff6d5b775667565ddc7b705fabb38defc1d7ad3a10f8dd",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:24:08.257969+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-11-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT FAIL"
+    },
+    {
+      "case_id": "CAL-20",
+      "expected_status": "FAIL",
+      "baseline": {
+        "case_id": "CAL-20",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "248f7c12c60f3df4dd168f557c252b665c9ddc7b462191bfeb524d66479d37f4",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:24:45.698850+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-20-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-20",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "0601edf424b12fcd087027544599e6f1bbcd60486bb34e6d7d9daede21ecbeb4",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:25:10.626504+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-20-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT FAIL"
+    },
+    {
+      "case_id": "CAL-30",
+      "expected_status": "FAIL",
+      "baseline": {
+        "case_id": "CAL-30",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "268d3a8459b27f479d04c026a4824bab66b4dc88b453af4243a3ec2b420125ec",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:25:47.843886+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-30-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-30",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "83a565bbb732ca574098af1b4c4c9d05186f9cbaf780ddab9ada7162fe08c1fd",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:26:06.896496+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-30-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT FAIL"
+    },
+    {
+      "case_id": "CAL-44",
+      "expected_status": "FAIL",
+      "baseline": {
+        "case_id": "CAL-44",
+        "prompt_key": "B",
+        "prompt_id": "prompt:phase6b:judge:B:v1",
+        "prompt_hash": "586988b878cf8121bd6e627a270446e3383fdfec433d8d282884f530aac866c1",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:26:59.161664+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-44-model_studio-B-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "candidate": {
+        "case_id": "CAL-44",
+        "prompt_key": "B-prime",
+        "prompt_id": "prompt:phase6b:judge:B-prime:v1",
+        "prompt_hash": "b53a8347b83e003887256e2b4f7d748e6bda213e60b4d1a9d58d8de690f6929d",
+        "attempt": 1,
+        "timestamp": "2026-08-17T02:27:33.673916+00:00",
+        "artifact": "artifacts/candidate-eval/CAL-44-model_studio-B-prime-matrix-r1.json",
+        "outcome": {
+          "decision": "ACCEPT",
+          "final_verdict": "FAIL",
+          "final_confidence": "HIGH",
+          "final_score": 0.0
+        },
+        "contract": {
+          "decision": "ACCEPT",
+          "reason": null,
+          "stage": "contract"
+        }
+      },
+      "changed": false,
+      "change_type": "UNCHANGED",
+      "reason": "both ACCEPT FAIL"
+    }
+  ],
+  "aggregate": {
+    "total_cases": 24,
+    "improvements": [
+      "CAL-26"
+    ],
+    "regressions": [],
+    "unchanged": [
+      "TASK-JUDGE-04",
+      "CAL-17",
+      "CAL-27",
+      "CAL-36",
+      "CAL-37",
+      "CAL-38",
+      "CAL-40",
+      "TASK-JUDGE-01",
+      "TASK-JUDGE-07",
+      "CAL-08",
+      "CAL-18",
+      "CAL-19",
+      "CAL-28",
+      "CAL-41",
+      "TASK-JUDGE-03",
+      "CAL-11",
+      "CAL-20",
+      "CAL-30",
+      "CAL-44"
+    ],
+    "unclassified": [
+      "CAL-15",
+      "CAL-16",
+      "CAL-25",
+      "CAL-32"
+    ],
+    "counts": {
+      "IMPROVEMENT": 1,
+      "REGRESSION": 0,
+      "UNCHANGED": 19,
+      "UNCLASSIFIED": 4
+    },
+    "invalid_outputs": {
+      "B": [
+        "CAL-26"
+      ],
+      "B-prime": []
+    },
+    "provider_errors": {
+      "B": [
+        "CAL-15",
+        "CAL-16",
+        "CAL-25"
+      ],
+      "B-prime": [
+        "CAL-32"
+      ]
+    }
+  },
+  "gate": {
+    "decision": "INSUFFICIENT_EVIDENCE",
+    "checks": {
+      "target_failure_fixed": true,
+      "no_deterministic_regression": true,
+      "candidate_reproducible": true,
+      "provider_errors": [
+        "CAL-15",
+        "CAL-16",
+        "CAL-25",
+        "CAL-32"
+      ]
+    }
+  }
+}

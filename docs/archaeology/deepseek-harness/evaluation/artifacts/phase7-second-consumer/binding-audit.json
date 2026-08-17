@@ -1,0 +1,16 @@
+{
+  "scanned": "protocol objects + replay gate",
+  "forbidden_tokens": [
+    "cal-26",
+    "task-judge",
+    "b-prime",
+    "prompt-b-v2",
+    "wilson",
+    "model_studio",
+    "qwen3.7-plus",
+    "promotion-policy-e7",
+    "system_prompt_snapshot"
+  ],
+  "hits": {},
+  "pass": true
+}

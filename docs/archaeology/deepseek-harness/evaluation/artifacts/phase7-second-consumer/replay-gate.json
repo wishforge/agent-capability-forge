@@ -1,0 +1,441 @@
+{
+  "policy": {
+    "policy_id": "phase7-second-consumer-replay-v1",
+    "pre_registration_ref": "REPLAY_ONLY (not the original S7.3 experiment)",
+    "dataset": "gold-v2",
+    "baseline_ref": "baseline-planwriter-v1",
+    "target": "gold-v2 median plan quality",
+    "effectiveness_rule": "median delta > noise",
+    "safety_rule": "no L0/agent failure increase; no stable negative delta beyond noise",
+    "governance_rule": "registered policy bytes + manifest + source hashes (consumer-2 original run: MISSING)",
+    "noise": 0.0447,
+    "noise_source": "baseline repeat medians only (std of 5 baseline runs)",
+    "decision_semantics": "PROMOTE / HOLD / REJECT (doc 57 section 9)"
+  },
+  "gate": {
+    "candidate_bad_v1": {
+      "pairs": {
+        "1": {
+          "mechanical": "PASS",
+          "protocol": "HOLD",
+          "reasons": [
+            "stable_improvement",
+            "governance_missing"
+          ],
+          "delta_median": 0.1,
+          "effectiveness_met": true
+        },
+        "2": {
+          "mechanical": "PASS",
+          "protocol": "HOLD",
+          "reasons": [
+            "stable_improvement",
+            "governance_missing"
+          ],
+          "delta_median": 0.15,
+          "effectiveness_met": true
+        },
+        "3": {
+          "mechanical": "PASS",
+          "protocol": "HOLD",
+          "reasons": [
+            "stable_improvement",
+            "governance_missing"
+          ],
+          "delta_median": 0.1,
+          "effectiveness_met": true
+        },
+        "4": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "variance_too_large"
+          ],
+          "delta_median": 0.0
+        },
+        "5": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=1",
+            "candidate_errors=0"
+          ]
+        }
+      },
+      "combined": {
+        "decision": "HOLD",
+        "rule": "no REJECT and not all PROMOTE -> HOLD",
+        "counts": {
+          "PROMOTE": 0,
+          "HOLD": 5,
+          "REJECT": 0
+        }
+      },
+      "attribution": {
+        "candidate_id": "candidate_bad_v1",
+        "primary": "INSUFFICIENT_EVIDENCE",
+        "expressible": {
+          "BASELINE_INSTABILITY": true,
+          "PROVIDER_NONDETERMINISM": true,
+          "INSUFFICIENT_EVIDENCE": true,
+          "CANDIDATE_REGRESSION_SCORE_LEVEL": false,
+          "CANDIDATE_REGRESSION_VERDICT_LEVEL": false
+        },
+        "baseline_repeat_medians": [
+          0.1,
+          0.15,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "candidate_repeat_medians": [
+          0.2,
+          0.3,
+          0.3,
+          0.2,
+          0.3
+        ],
+        "regression_pairs": [],
+        "insufficient_pairs": [
+          5
+        ],
+        "note": "verdict-level strict-stability requires per-case binary verdicts; consumer-2 facts are continuous scores, so that rule is UNKNOWN/not-applicable and score-level strictness is used."
+      }
+    },
+    "candidate_bad_v2": {
+      "pairs": {
+        "1": {
+          "mechanical": "FAIL",
+          "protocol": "REJECT",
+          "reasons": [
+            "stable_lower_score"
+          ],
+          "delta_median": -0.1
+        },
+        "2": {
+          "mechanical": "FAIL",
+          "protocol": "REJECT",
+          "reasons": [
+            "stable_lower_score"
+          ],
+          "delta_median": -0.15
+        },
+        "3": {
+          "mechanical": "FAIL",
+          "protocol": "REJECT",
+          "reasons": [
+            "stable_lower_score"
+          ],
+          "delta_median": -0.2
+        },
+        "4": {
+          "mechanical": "FAIL",
+          "protocol": "REJECT",
+          "reasons": [
+            "stable_lower_score"
+          ],
+          "delta_median": -0.2
+        },
+        "5": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=1",
+            "candidate_errors=0"
+          ]
+        }
+      },
+      "combined": {
+        "decision": "REJECT",
+        "rule": "any REJECT pair -> REJECT",
+        "counts": {
+          "PROMOTE": 0,
+          "HOLD": 1,
+          "REJECT": 4
+        }
+      },
+      "attribution": {
+        "candidate_id": "candidate_bad_v2",
+        "primary": "CANDIDATE_REGRESSION (score-level strict) + INSUFFICIENT_EVIDENCE",
+        "expressible": {
+          "BASELINE_INSTABILITY": true,
+          "PROVIDER_NONDETERMINISM": false,
+          "INSUFFICIENT_EVIDENCE": true,
+          "CANDIDATE_REGRESSION_SCORE_LEVEL": true,
+          "CANDIDATE_REGRESSION_VERDICT_LEVEL": false
+        },
+        "baseline_repeat_medians": [
+          0.1,
+          0.15,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "candidate_repeat_medians": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "regression_pairs": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "insufficient_pairs": [
+          5
+        ],
+        "note": "verdict-level strict-stability requires per-case binary verdicts; consumer-2 facts are continuous scores, so that rule is UNKNOWN/not-applicable and score-level strictness is used."
+      }
+    },
+    "candidate_good_v1": {
+      "pairs": {
+        "1": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=0",
+            "candidate_errors=3"
+          ]
+        },
+        "2": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=0",
+            "candidate_errors=4"
+          ]
+        },
+        "3": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=0",
+            "candidate_errors=2"
+          ]
+        },
+        "4": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=0",
+            "candidate_errors=3"
+          ]
+        },
+        "5": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=1",
+            "candidate_errors=3"
+          ]
+        }
+      },
+      "combined": {
+        "decision": "HOLD",
+        "rule": "no REJECT and not all PROMOTE -> HOLD",
+        "counts": {
+          "PROMOTE": 0,
+          "HOLD": 5,
+          "REJECT": 0
+        }
+      },
+      "attribution": {
+        "candidate_id": "candidate_good_v1",
+        "primary": "INSUFFICIENT_EVIDENCE",
+        "expressible": {
+          "BASELINE_INSTABILITY": true,
+          "PROVIDER_NONDETERMINISM": true,
+          "INSUFFICIENT_EVIDENCE": true,
+          "CANDIDATE_REGRESSION_SCORE_LEVEL": false,
+          "CANDIDATE_REGRESSION_VERDICT_LEVEL": false
+        },
+        "baseline_repeat_medians": [
+          0.1,
+          0.15,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "candidate_repeat_medians": [
+          0.1,
+          0.1,
+          0.1,
+          0.1,
+          0.125
+        ],
+        "regression_pairs": [],
+        "insufficient_pairs": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "note": "verdict-level strict-stability requires per-case binary verdicts; consumer-2 facts are continuous scores, so that rule is UNKNOWN/not-applicable and score-level strictness is used."
+      }
+    },
+    "candidate_neutral_v1": {
+      "pairs": {
+        "1": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "variance_too_large"
+          ],
+          "delta_median": 0.0
+        },
+        "2": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "variance_too_large"
+          ],
+          "delta_median": 0.0
+        },
+        "3": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "variance_too_large"
+          ],
+          "delta_median": 0.0
+        },
+        "4": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "variance_too_large"
+          ],
+          "delta_median": 0.0
+        },
+        "5": {
+          "mechanical": "INCONCLUSIVE",
+          "protocol": "HOLD",
+          "reasons": [
+            "insufficient_evidence",
+            "baseline_errors=1",
+            "candidate_errors=0"
+          ]
+        }
+      },
+      "combined": {
+        "decision": "HOLD",
+        "rule": "no REJECT and not all PROMOTE -> HOLD",
+        "counts": {
+          "PROMOTE": 0,
+          "HOLD": 5,
+          "REJECT": 0
+        }
+      },
+      "attribution": {
+        "candidate_id": "candidate_neutral_v1",
+        "primary": "INSUFFICIENT_EVIDENCE",
+        "expressible": {
+          "BASELINE_INSTABILITY": true,
+          "PROVIDER_NONDETERMINISM": true,
+          "INSUFFICIENT_EVIDENCE": true,
+          "CANDIDATE_REGRESSION_SCORE_LEVEL": false,
+          "CANDIDATE_REGRESSION_VERDICT_LEVEL": false
+        },
+        "baseline_repeat_medians": [
+          0.1,
+          0.15,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "candidate_repeat_medians": [
+          0.1,
+          0.15,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "regression_pairs": [],
+        "insufficient_pairs": [
+          5
+        ],
+        "note": "verdict-level strict-stability requires per-case binary verdicts; consumer-2 facts are continuous scores, so that rule is UNKNOWN/not-applicable and score-level strictness is used."
+      }
+    }
+  },
+  "provenance": {
+    "source_hashes": {
+      "candidate_bad_v1:r1:run.json": "12d57130b132a3f7e334c8538616096e0e7b73f62a63725014bf9682f895ad01",
+      "candidate_bad_v1:r1:results.jsonl": "e9853c48d670d79fa1aae40678ae338d524587dc5c551fdc9b09ce46cf323d4d",
+      "candidate_bad_v1:r2:run.json": "8080f8e38b55bc369907d40aa658b684d00fa955543e71a0908eefff4a1ff260",
+      "candidate_bad_v1:r2:results.jsonl": "ca90d425b23747c53ecb04138892bfd83045c36246a54a0d09ae2a3e247d502a",
+      "candidate_bad_v1:r3:run.json": "67b1086169319e7e75208bc48808f1d7998b16f245be7d5128683f320dffb185",
+      "candidate_bad_v1:r3:results.jsonl": "b92349f0ca59bdea1a914eadd185c5be19b6c0f2efe93352070d6779e4c09d51",
+      "candidate_bad_v1:r4:run.json": "94eb34b4378fc17a35fe9b0087ceabfdc54b9dcaf4e71af9fbda329b3dc4432c",
+      "candidate_bad_v1:r4:results.jsonl": "943598280a71c60f1c65154ff2f7f91422c915bcc02a0032b3818507d6ae1d47",
+      "candidate_bad_v1:r5:run.json": "59e55293c8a829596cc6f5a0118d788f7a283afc7ee970103509373b7b635755",
+      "candidate_bad_v1:r5:results.jsonl": "2d6eebff0774c49b866643634d997045cf7cd1a50459b15a39e73e8bdfc1c0ad",
+      "candidate_neutral_v1:r1:run.json": "4bcf5ab78f29eed17c113eaabb748773e20494967ee0d73642d1760a797881e3",
+      "candidate_neutral_v1:r1:results.jsonl": "7fc119d42bf5d21c9c5ba41d568d968e18c04e9fcbaa23e59869336e8dfa7ffa",
+      "candidate_neutral_v1:r2:run.json": "d129b9637da4de14b92433eec712758d363d0806327bb0b28f2b29b46cf52376",
+      "candidate_neutral_v1:r2:results.jsonl": "e7d073ceb27f2317d71b9a9ddecc16569b4b9f2df6354b4ad7afe734e5202034",
+      "candidate_neutral_v1:r3:run.json": "1f4071eb75a9482f48ee988ba19cae34280c059e41e14b3b4ef77ad44c051afe",
+      "candidate_neutral_v1:r3:results.jsonl": "50d8e1226cf96822e3eee9d179cdf936b48a5a32df63cf3ee82fe5c4f603fc4c",
+      "candidate_neutral_v1:r4:run.json": "bc182319422f2591be7bc81791be2f6ebdf120be71684670529cfc21b4966c5e",
+      "candidate_neutral_v1:r4:results.jsonl": "8026a91b1c8adeab7fee5e37aa1d4ac47dd800d7cef3cac37c0008b8abb91b49",
+      "candidate_neutral_v1:r5:run.json": "08d5142c04c592842fd9834d355bacee4f5f4c78e8667fb26008235a66ee927a",
+      "candidate_neutral_v1:r5:results.jsonl": "32ffb2978207c5fdf717d8503a3fdd44ec883efd4111a9f4777483529bd6b2db",
+      "baseline-planwriter-v1:r1:run.json": "de7a7c748a009a600d1d47e4da269358a69abc83600536119537f3d721e48443",
+      "baseline-planwriter-v1:r1:results.jsonl": "2c977594333314680cf7ab765d4c4b2690e396ccbf11b40f86ff4b5a7c7e532b",
+      "baseline-planwriter-v1:r2:run.json": "86da1126d1a01b5bbeea0f9030677e0171c67bb088a6efdbed8a6884817a42b2",
+      "baseline-planwriter-v1:r2:results.jsonl": "31d0cf01f6a66b472c11719c3e2a7643b74334e3513bf45112afe57f3f947fcf",
+      "baseline-planwriter-v1:r3:run.json": "1055b88e3bd57f7717394cac8b34010025b0013fa18495bd8da1822c52034d6d",
+      "baseline-planwriter-v1:r3:results.jsonl": "0a7b8e8252c5426f835254f5ea66675cbe8cd0b4fe1f337ebd52ed8536d9ffda",
+      "baseline-planwriter-v1:r4:run.json": "1d1e5a3ed4f1169d45b8a78efce8d0df61a5448fb6ee9f23a06d785a938a676a",
+      "baseline-planwriter-v1:r4:results.jsonl": "3da860ccb1099e689b7baf12636ca2d3e5793aea939258596299e4b184fbe46d",
+      "baseline-planwriter-v1:r5:run.json": "675dada2daf23edcb90f3b0b7cba9aeae8aa10674baf0cca2a8165c9db169374",
+      "baseline-planwriter-v1:r5:results.jsonl": "c69d8d467ffdc8e955e103d363b991cb9f52537a9d6443af6fba468b895bab82",
+      "candidate_good_v1:r1:run.json": "70efa8883dca4b4aa804f7df106f57741ec9bb6c77858f6d9f08aba0310cae45",
+      "candidate_good_v1:r1:results.jsonl": "384d92bdd669a01e772b3f1f3134b1d8175769b2a0d189cb5dda2bfdd1222d8c",
+      "candidate_good_v1:r2:run.json": "00b5fc302fd37168bb2f83516b52d58233de9dab211474b536fa5ad12285be0d",
+      "candidate_good_v1:r2:results.jsonl": "60bb053e2df46d30c9b7ac175e7f42d89d4e1077f3159bafb679aa99e75d60af",
+      "candidate_good_v1:r3:run.json": "4f654fb69c641bde4a01d36bf098f0c8b20c72305e6479037d8f79558d08cc5c",
+      "candidate_good_v1:r3:results.jsonl": "e382f7489842cf5ce5ec990c1387c3200a01969b9f32be6a515f76baa5659a85",
+      "candidate_good_v1:r4:run.json": "85afe97897dd92b9247ea980b4406c41cc1bad41c22bb45161f066c8d0665bf1",
+      "candidate_good_v1:r4:results.jsonl": "d5e3b96ae7506fb8dc062e6dee80e74ceeb22c7ac206f851e2030132e5411b11",
+      "candidate_good_v1:r5:run.json": "0b8e346fe493da9d48d7347a0919cda8bb1e1f8f551eb8bc071420f808537f73",
+      "candidate_good_v1:r5:results.jsonl": "eb8dec55a594bc9299df8a53fa600a214272910988d4370a3d32af407e985919",
+      "candidate_bad_v2:r1:run.json": "e8332862950aafba6dc3968969f08016d43530ddb931a23d1f9fc00c32e388d4",
+      "candidate_bad_v2:r1:results.jsonl": "816681609d357ee3e5f9f1576454acc1d4c7a34240b50909461a7e5b52fc5e99",
+      "candidate_bad_v2:r2:run.json": "ce4f5b1d9e27001d67fba1725d121103078eaee1767fdebeddd07a2fb6ecf97a",
+      "candidate_bad_v2:r2:results.jsonl": "f46c1645f1fb6aa83d7d536c074f849561d7506cca033c48a19629ec442f7a6e",
+      "candidate_bad_v2:r3:run.json": "77fc056e25b4250465263c530c0aa08762703b43aafb61bf79576d9c65455d93",
+      "candidate_bad_v2:r3:results.jsonl": "5c998965a4bcf84e6c632e08333ee2f6aaf38e729d0804864d268ef549e39261",
+      "candidate_bad_v2:r4:run.json": "bc657a6eac9fecdd20bce11a1b854074750467a49e48c3b3625c6fd838b12998",
+      "candidate_bad_v2:r4:results.jsonl": "58cc4f2b65a1eed4f03c8c54d032a47f05d9771cda666a2e42c6f6102e99a0f6",
+      "candidate_bad_v2:r5:run.json": "6d18504149b2b70d01747797039ef4926c3f499aba9c11c5b812d3583c81fb5d",
+      "candidate_bad_v2:r5:results.jsonl": "e22791b863d4038ff5d87de947d75d202e60d143e8b6c2cc593970b914d7714d",
+      "candidate:baseline-planwriter-v1": "2d075011db035fb2c5ea8cd1e8e8e5292b60c7af878c1d3b2478205191ee41ba",
+      "candidate:candidate_bad_v1": "e72d658af0b46f14570c19898fd9897e3bbc73e890d6022c836119f2575d4b6f",
+      "candidate:candidate_bad_v2": "c24677093c7ccbedb60b028c3cb01ba8fa8e61b0e5ba2fae04bec28e85560819",
+      "candidate:candidate_good_v1": "0f3e0bbf2eb4fec3426ef726612b0d8680c20d287e1a2186c03cb74928fde218",
+      "candidate:candidate_neutral_v1": "a3b658024b43d2c2d7f6e7c739ca2955f1d325ccb203e85a9e1a88654a94bdf4",
+      "dataset:gold-v2": "67df1e3b2a3d65bb942fbb5e86c91d6311731a7bb79c453109631baf4dd88a14"
+    },
+    "registered_policy": {
+      "status": "MISSING",
+      "note": "original S7.3 experiment has no frozen policy file or commit ref; replay policy is validation-only"
+    },
+    "manifest": {
+      "status": "MISSING"
+    },
+    "git_anchor": null,
+    "recompute": "python3 docs/archaeology/unified-runtime/phase7/validate_second_consumer.py"
+  }
+}

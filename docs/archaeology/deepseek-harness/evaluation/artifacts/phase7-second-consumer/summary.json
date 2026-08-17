@@ -1,0 +1,34 @@
+{
+  "consumer": "swe-planner plan-writer (control-plane-loop S7.3)",
+  "policy_ref": "phase7-second-consumer-replay-v1",
+  "noise": 0.0447,
+  "combined_decisions": {
+    "candidate_bad_v1": "HOLD",
+    "candidate_bad_v2": "REJECT",
+    "candidate_good_v1": "HOLD",
+    "candidate_neutral_v1": "HOLD"
+  },
+  "mechanical_counts": {
+    "candidate_bad_v1": {
+      "PASS": 3,
+      "FAIL": 0,
+      "INCONCLUSIVE": 2
+    },
+    "candidate_bad_v2": {
+      "PASS": 0,
+      "FAIL": 4,
+      "INCONCLUSIVE": 1
+    },
+    "candidate_good_v1": {
+      "PASS": 0,
+      "FAIL": 0,
+      "INCONCLUSIVE": 5
+    },
+    "candidate_neutral_v1": {
+      "PASS": 0,
+      "FAIL": 0,
+      "INCONCLUSIVE": 5
+    }
+  },
+  "binding_audit_pass": true
+}

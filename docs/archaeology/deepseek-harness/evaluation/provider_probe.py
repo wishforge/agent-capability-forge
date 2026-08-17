@@ -909,6 +909,11 @@ def _summarize_attribution(*, repeats: int = ATTRIBUTION_REPEATS_DEFAULT) -> int
 PROMOTION_DIR = EVAL / "artifacts" / "promotion-gate"
 PROMOTION_POLICY_ID = "promotion-policy-e7-v1"
 PROMOTION_POLICY_VERSION = "1"
+PROMOTION_FINAL_POLICY_ID = f"{PROMOTION_POLICY_ID}-final"
+PROMOTION_REGISTERED_POLICY_FILE = f"{PROMOTION_POLICY_ID}-registered.json"
+PROMOTION_FINAL_POLICY_FILE = f"{PROMOTION_POLICY_ID}-final.json"
+PROMOTION_POLICY_COMMIT = "ca06a9a6ab155240381345b38ed8d6362031198f"
+PROMOTION_POLICY_AUDIT_REVISION_COMMIT = "NOT_AVAILABLE_YET"
 PROMOTION_CORE_N = 10
 PROMOTION_CONTROL_N = 5
 PROMOTION_MAX_REPLACEMENTS = 2
@@ -1246,12 +1251,30 @@ def promotion_policy() -> dict:
     }
 
 
+def _policy_file_sha256(name: str) -> str | None:
+    path = PROMOTION_DIR / name
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
 def _policy_manifest() -> dict:
     return {
-        "manifest_id": "promotion-gate-e7-manifest-1",
+        "manifest_id": "promotion-gate-e7-manifest-2",
         "policy_ref": PROMOTION_POLICY_ID,
         "candidate_id": CANDIDATE_ID,
-        "policy_written_at_git_commit": _git_commit(),
+        "registered_policy": {
+            "id": PROMOTION_POLICY_ID,
+            "version": PROMOTION_POLICY_VERSION,
+            "path": PROMOTION_REGISTERED_POLICY_FILE,
+            "sha256": _policy_file_sha256(PROMOTION_REGISTERED_POLICY_FILE),
+            "registration_commit": PROMOTION_POLICY_COMMIT,
+        },
+        "final_policy": {
+            "id": PROMOTION_FINAL_POLICY_ID,
+            "version": "1",
+            "path": PROMOTION_FINAL_POLICY_FILE,
+            "sha256": _policy_file_sha256(PROMOTION_FINAL_POLICY_FILE),
+            "audit_revision_commit": PROMOTION_POLICY_AUDIT_REVISION_COMMIT,
+        },
         "fixed_conditions": {
             "dataset_id": PHASE6D_DATASET.dataset_id,
             "dataset_version": PHASE6D_DATASET.version,
@@ -1298,6 +1321,14 @@ def _write_promotion_policy() -> int:
 
 def _load_promotion_policy() -> dict | None:
     path = PROMOTION_DIR / "promotion-policy.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_promotion_policy_version(version: str) -> dict | None:
+    """Load an immutable policy revision (e.g. 'registered' or 'final')."""
+    path = PROMOTION_DIR / f"{PROMOTION_POLICY_ID}-{version}.json"
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))

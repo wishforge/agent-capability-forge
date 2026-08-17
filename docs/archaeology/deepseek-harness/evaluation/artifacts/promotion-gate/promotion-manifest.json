@@ -1,8 +1,21 @@
 {
-  "manifest_id": "promotion-gate-e7-manifest-1",
+  "manifest_id": "promotion-gate-e7-manifest-2",
   "policy_ref": "promotion-policy-e7-v1",
   "candidate_id": "prompt-b-v2-candidate-1",
-  "policy_written_at_git_commit": "3f3d6c7955f070ea722d1a1ae412a9cd1ab49610",
+  "registered_policy": {
+    "id": "promotion-policy-e7-v1",
+    "version": "1",
+    "path": "promotion-policy-e7-v1-registered.json",
+    "sha256": "d7a75b97165f6b628d9edd25afd96aa68af31ebeb4c78a11736f19dfcbf97ddb",
+    "registration_commit": "ca06a9a6ab155240381345b38ed8d6362031198f"
+  },
+  "final_policy": {
+    "id": "promotion-policy-e7-v1-final",
+    "version": "1",
+    "path": "promotion-policy-e7-v1-final.json",
+    "sha256": "d4c66daae751869405569cd4a06ba2b7c187f963525a6174027102c133e252ea",
+    "audit_revision_commit": "NOT_AVAILABLE_YET"
+  },
   "fixed_conditions": {
     "dataset_id": "calibration:phase6d:procurement",
     "dataset_version": "2",

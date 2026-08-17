@@ -1,0 +1,269 @@
+{
+  "policy_id": "promotion-policy-e7-v1-final",
+  "policy_version": "1",
+  "created_at": "2026-08-17",
+  "candidate_id": "prompt-b-v2-candidate-1",
+  "basis": {
+    "decision_evidence": "E.7 fresh paired replay only; E.5/E.6 evidence is reported as context and is not part of the rate-level decision",
+    "e6_precondition": "E.6 REGRESSION_SAFETY_CONFIRMED is required and not re-litigated; missing or different E.6 gate blocks the gate"
+  },
+  "fixed_conditions": {
+    "dataset_id": "calibration:phase6d:procurement",
+    "dataset_version": "2",
+    "provider": "model_studio",
+    "model": "qwen3.7-plus",
+    "baseline_prompt_id": "prompt:phase6b:judge:B:v1",
+    "candidate_prompt_id": "prompt:phase6b:judge:B-prime:v1",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 8192,
+    "timeout": 120.0,
+    "response_format": {
+      "type": "json_object"
+    },
+    "parser": "judge_provider._parse",
+    "contract": "contract_guard"
+  },
+  "scope": {
+    "target": [
+      "CAL-26"
+    ],
+    "suspicious_stable_pass": [
+      "TASK-JUDGE-01",
+      "CAL-08",
+      "CAL-18"
+    ],
+    "stable_pass_controls": [
+      "TASK-JUDGE-07",
+      "CAL-41"
+    ],
+    "critical_fail_controls": [
+      "TASK-JUDGE-03",
+      "CAL-11"
+    ]
+  },
+  "sample_size": {
+    "core_n": 10,
+    "control_n": 5,
+    "replacement_policy": "failed attempts replaced same-arm same-round up to 2 times; a round with no ACCEPT after replacements makes that case-arm sample-insufficient"
+  },
+  "outcome_coding": {
+    "valid": "ACCEPT with final_verdict in PASS/FAIL/INCONCLUSIVE",
+    "invalid_output": "REJECT(INVALID_OUTPUT)",
+    "transport": "REJECT(TIMEOUT/TRANSIENT/UNAVAILABLE/PERMANENT)"
+  },
+  "success_definitions": {
+    "target": "INCONCLUSIVE",
+    "suspicious_stable_pass": "PASS",
+    "stable_pass_control": "PASS",
+    "critical_fail_control": "FAIL"
+  },
+  "statistical_method": {
+    "interval": "Wilson score interval, two-sided 95%",
+    "z": 1.96,
+    "rate": "success_count / n_contract",
+    "delta": "candidate round_success_rate - baseline round_success_rate",
+    "formula": "wilson_interval() in provider_probe.py"
+  },
+  "transport_bound": {
+    "core_max_failures_per_arm": 2,
+    "control_max_failures_per_arm": 1,
+    "action": "exceeding the bound => PROVIDER_INSTABILITY => HOLD unless a REJECT condition already applies"
+  },
+  "rate_rules": [
+    {
+      "rule_id": "target_baseline_still_broken",
+      "case_set": "target",
+      "arm": "B",
+      "metric": "inc_count",
+      "op": "le",
+      "threshold": 2,
+      "detail": "baseline CAL-26 must still mostly fail (INC count <= 2/10)"
+    },
+    {
+      "rule_id": "target_baseline_still_broken",
+      "case_set": "target",
+      "arm": "B",
+      "metric": "invalid_count",
+      "op": "ge",
+      "threshold": 5,
+      "detail": "baseline CAL-26 must still produce INVALID_OUTPUT >= 5/10"
+    },
+    {
+      "rule_id": "target_candidate_fixed",
+      "case_set": "target",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "ge",
+      "threshold": 8,
+      "detail": "candidate CAL-26 INC count >= 8/10"
+    },
+    {
+      "rule_id": "target_candidate_fixed",
+      "case_set": "target",
+      "arm": "B-prime",
+      "metric": "ci_low",
+      "op": "ge",
+      "threshold": 0.5,
+      "detail": "candidate CAL-26 Wilson 95% lower bound >= 0.5"
+    },
+    {
+      "rule_id": "target_candidate_fixed",
+      "case_set": "target",
+      "arm": "B-prime",
+      "metric": "invalid_count",
+      "op": "eq",
+      "threshold": 0,
+      "detail": "candidate must never emit INVALID_OUTPUT"
+    },
+    {
+      "rule_id": "target_fix_absent",
+      "case_set": "target",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "ge",
+      "threshold": 5,
+      "detail": "candidate CAL-26 INC count >= 5/10 (target fix present)"
+    },
+    {
+      "rule_id": "target_delta",
+      "case_set": "target",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": 0.5,
+      "detail": "candidate INC rate - baseline INC rate >= 0.5"
+    },
+    {
+      "rule_id": "suspicious_baseline_stable",
+      "case_set": "suspicious",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 8,
+      "detail": "baseline PASS count >= 8/10 per suspicious case"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_set": "suspicious",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 9,
+      "detail": "candidate PASS count >= 9/10 per suspicious case"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_set": "suspicious",
+      "arm": "B-prime",
+      "metric": "ci_low",
+      "op": "ge",
+      "threshold": 0.5,
+      "detail": "candidate Wilson 95% lower bound >= 0.5"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_set": "suspicious",
+      "arm": "B-prime",
+      "metric": "inc_count",
+      "op": "le",
+      "threshold": 1,
+      "detail": "candidate over-abstention INC count <= 1/10"
+    },
+    {
+      "rule_id": "suspicious_candidate_stable",
+      "case_set": "suspicious",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "detail": "candidate FAIL count must be 0 on stable-PASS cases"
+    },
+    {
+      "rule_id": "suspicious_delta",
+      "case_set": "suspicious",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.1,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.1"
+    },
+    {
+      "rule_id": "stable_control_baseline",
+      "case_set": "stable_pass_control",
+      "arm": "B",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 4,
+      "detail": "baseline PASS count >= 4/5 per stable control"
+    },
+    {
+      "rule_id": "stable_control_candidate",
+      "case_set": "stable_pass_control",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "ge",
+      "threshold": 4,
+      "detail": "candidate PASS count >= 4/5 per stable control"
+    },
+    {
+      "rule_id": "stable_control_candidate",
+      "case_set": "stable_pass_control",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "eq",
+      "threshold": 0,
+      "detail": "candidate FAIL count must be 0 on stable controls"
+    },
+    {
+      "rule_id": "stable_control_delta",
+      "case_set": "stable_pass_control",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.2,
+      "detail": "candidate PASS rate - baseline PASS rate >= -0.2"
+    },
+    {
+      "rule_id": "critical_control_baseline",
+      "case_set": "critical_fail_control",
+      "arm": "B",
+      "metric": "fail_count",
+      "op": "ge",
+      "threshold": 4,
+      "detail": "baseline FAIL count >= 4/5 per critical control"
+    },
+    {
+      "rule_id": "critical_control_candidate",
+      "case_set": "critical_fail_control",
+      "arm": "B-prime",
+      "metric": "fail_count",
+      "op": "ge",
+      "threshold": 4,
+      "detail": "candidate FAIL count >= 4/5 per critical control"
+    },
+    {
+      "rule_id": "critical_control_candidate",
+      "case_set": "critical_fail_control",
+      "arm": "B-prime",
+      "metric": "pass_count",
+      "op": "eq",
+      "threshold": 0,
+      "detail": "candidate PASS count must be 0 on critical controls"
+    },
+    {
+      "rule_id": "critical_control_delta",
+      "case_set": "critical_fail_control",
+      "arm": null,
+      "metric": "delta",
+      "op": "ge",
+      "threshold": -0.2,
+      "detail": "candidate FAIL rate - baseline FAIL rate >= -0.2"
+    }
+  ],
+  "decision_semantics": {
+    "PROMOTE": "E.6 regression safety confirmed; all rate rules pass; sample sufficiency met; transport within bound; artifacts complete; no unresolved blocker",
+    "HOLD": "effectiveness evidence exists and no confirmed candidate regression, but sample/stability/provider variance/uncertainty is below the promotion thresholds",
+    "REJECT": "candidate-induced regression (stable-pass FAIL or critical PASS), target fix absent, candidate INVALID_OUTPUT, evidence integrity failure, or post-hoc policy change"
+  }
+}

@@ -270,8 +270,10 @@ E.6 gate                       = REGRESSION_SAFETY_CONFIRMED
 
 ```text
 artifacts/promotion-gate/
-  promotion-policy.json        # pre-registered policy（frozen）
-  promotion-manifest.json      # fixed conditions + schedule + policy ref
+  promotion-policy.json                        # mutable live copy（E.7 = registered bytes）
+  promotion-policy-e7-v1-registered.json       # immutable registered policy（ca06a9a）
+  promotion-policy-e7-v1-final.json            # audited final policy（E.7.1）
+  promotion-manifest.json      # fixed conditions + schedule + policy provenance
   promotion-runs.jsonl         # 142 attempt rows（raw evidence 索引）
   promotion-matrix.json        # per-case / per-arm summary + delta
   promotion-stats.json         # statistical summary + rules
@@ -281,16 +283,40 @@ artifacts/promotion-gate/
 
 未覆盖 `candidate-eval/` 与 `regression-attribution/`。
 
+## Policy lifecycle
+
+E.7 registration:
+- v1-registered（`promotion-policy-e7-v1-registered.json`）
+- commit `ca06a9a`
+- used for live experiment
+- immutable historical evidence（E.7 matrix/stats/gate/runs 只引用 registered policy）
+
+E.7.1 audit:
+- final/audited revision（`promotion-policy-e7-v1-final.json`）
+- declaration/provenance corrections only（rate documentation =
+  `success_count / n_contract`；`target_fix_absent` explicitly declared）
+- no threshold changes
+- no live rerun
+- Gate remains HOLD
+
 ## 9. Validation
 
 ```text
-promotion gate offline tests  = 12 passed（tests/test_promotion_gate.py）
-全量 evaluation tests         = 248 passed, 11 skipped, 8 subtests passed
+promotion gate offline tests  = 19 passed（tests/test_promotion_gate.py）
+全量 evaluation tests         = 255 passed, 11 skipped, 8 subtests passed
 py_compile                    = provider_probe / judge_provider /
                                 phase6e_matrix / calibration / tests 全部通过
 secret scan                   = rg -l -i "api_key|authorization|bearer |sk-[a-z0-9]{24,}"
                                 artifacts/promotion-gate/ -> 0 命中
-offline recompute             = --summarize-promotion-gate 与 live 结果一致（GATE=HOLD）
+offline recompute             = temp-dir --summarize-promotion-gate：
+                                GATE=HOLD, policy_frozen=True,
+                                e6=REGRESSION_SAFETY_CONFIRMED；
+                                gate.json byte-identical to 22890c1
+                                （matrix/stats 仅 run_git_commit 为当前 HEAD，预期）
+provenance                    = registered bytes == git show ca06a9a；
+                                registered/final SHA256 == manifest；
+                                final 仅声明/来源差异；mutable
+                                promotion-policy.json 未归属 ca06a9a
 ```
 
 ## 10. Limitations

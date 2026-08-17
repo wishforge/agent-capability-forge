@@ -37,6 +37,7 @@ def valid_state() -> dict:
                 "git_commit": "g1",
                 "recorded_artifact_hashes": {"prompt": "a1"},
                 "current_artifact_hashes": {"prompt": "a1"},
+                "forged_artifact_digest": "a1",
             }
         },
         "runs": [
@@ -44,6 +45,7 @@ def valid_state() -> dict:
                 "run_id": "run-1",
                 "candidate_id": "cand-1",
                 "candidate_version": "v1",
+                "artifact_digest": "a1",
                 "policy_ref": "pol-1",
                 "policy_version": "1",
                 "status": "EVALUATED",
@@ -78,6 +80,7 @@ def valid_state() -> dict:
                 "run_id": "run-1",
                 "policy_ref": "pol-1",
                 "policy_version": "1",
+                "artifact_digest": "a1",
                 "value": "PROMOTE",
                 "gate_result": "PASS",
                 "created_at": "2026-08-17T01:00:00Z",
@@ -106,6 +109,7 @@ def valid_state() -> dict:
                 "candidate_version": "v1",
                 "promotion_decision_id": "dec-1",
                 "evaluation_run_id": "run-1",
+                "artifact_digest": "a1",
                 "policy_version": "1",
                 "requested_by": "control-plane",
                 "requested_at": "2026-08-17T01:30:00Z",
@@ -293,3 +297,97 @@ def test_doc_lists_all_block_codes() -> None:
     text = doc.read_text(encoding="utf-8")
     missing = [code for code in BLOCK_CODES if code not in text]
     assert not missing, f"doc missing ADOPTION_BLOCKED codes: {missing}"
+
+
+def test_missing_run_blocks_adoption() -> None:
+    state = valid_state()
+    state["decisions"][0]["run_id"] = "run-missing"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "RUN_MISSING" in blocked_codes(state)
+
+
+def test_run_mismatch_blocks_adoption() -> None:
+    state = valid_state()
+    state["adoptions"][0]["evaluation_run_id"] = "run-2"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "RUN_MISMATCH" in blocked_codes(state)
+
+
+def test_policy_not_registered_blocks_adoption() -> None:
+    state = valid_state()
+    state["policies"]["pol-1"]["registered"] = False
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "POLICY_NOT_REGISTERED" in blocked_codes(state)
+
+
+def test_run_policy_mismatch_blocks_adoption() -> None:
+    state = valid_state()
+    state["runs"][0]["policy_ref"] = "pol-2"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "RUN_POLICY_MISMATCH" in blocked_codes(state)
+
+
+def test_gate_not_pass_blocks_adoption() -> None:
+    state = valid_state()
+    state["decisions"][0]["gate_result"] = "HOLD"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "GATE_NOT_PASS" in blocked_codes(state)
+
+
+def test_tampered_decision_blocks_adoption() -> None:
+    state = valid_state()
+    state["decisions"][0]["current_hash"] = "tampered"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "DECISION_TAMPERED" in blocked_codes(state)
+
+
+def test_tampered_evidence_blocks_adoption() -> None:
+    state = valid_state()
+    state["evidence"][0]["current_hash"] = "tampered"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "EVIDENCE_TAMPERED" in blocked_codes(state)
+
+
+def test_stale_decision_timestamp_blocks_adoption() -> None:
+    state = valid_state()
+    state["decisions"][0]["created_at"] = "2026-08-16T23:59:59Z"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "STALE_DECISION" in blocked_codes(state)
+
+
+def test_artifact_digest_mismatch_blocks_adoption() -> None:
+    state = valid_state()
+    state["adoptions"][0]["artifact_digest"] = "a2"
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "ARTIFACT_DIGEST_MISMATCH" in blocked_codes(state)
+
+
+def test_missing_decision_timestamp_blocks_adoption() -> None:
+    state = valid_state()
+    del state["decisions"][0]["created_at"]
+    report = validate(state)
+    assert report["adoptions_allowed"] is False
+    assert "MISSING_DECISION_TIMESTAMP" in blocked_codes(state)
+
+
+def test_matching_artifact_digests_allow_adoption() -> None:
+    report = validate(valid_state())
+    assert report["pass"], report
+    assert report["adoptions_allowed"] is True
+    assert "ARTIFACT_DIGEST_MISMATCH" not in blocked_codes(valid_state())
+
+
+def test_hardening_doc_lists_new_codes() -> None:
+    doc = pathlib.Path(__file__).resolve().parents[1] / "67-phase7.4-adoption-guard-hardening.md"
+    text = doc.read_text(encoding="utf-8")
+    for code in ("ARTIFACT_DIGEST_MISMATCH", "MISSING_DECISION_TIMESTAMP"):
+        assert code in text

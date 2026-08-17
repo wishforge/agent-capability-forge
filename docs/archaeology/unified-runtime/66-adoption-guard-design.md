@@ -139,7 +139,7 @@ FACT  pilot/registry.py:1
 FACT  promote() 签名没有 decision / policy / provenance 参数（17 行）。
 FACT  promote() 不验证 evaluation 是否属于该 candidate、verdict 是否
       PASS、是否有合法 decision（17-42 行）。
-FACT  discover() 只返回 state=="promoted" 的 entry（64-76 行），
+FACT  discover() 只返回 state=="promoted" 的 entry（64-71 行），
       不校验 adopted version / decision。
 FACT  reject() 只写 state="rejected"，不记录终态语义（44-62 行）。
 FACT  registry entry 不存 candidate_id，只有 evaluation dict 里的
@@ -236,6 +236,8 @@ code。
 adoption_id             采用事件唯一 id（审计用）
 candidate_id            Candidate 稳定身份
 candidate_version       不可变 Candidate 版本（必须绑定 immutable version）
+artifact_digest         拟采用 artifact 的 digest（必须等于 decision /
+                        run / candidate 的 artifact digest）
 promotion_decision_id   授权采用的 PromotionDecision id
 evaluation_run_id       该 Decision 引用的 EvaluationRun id
 policy_version          Decision / Run / Policy 三方一致的 policy version
@@ -285,6 +287,9 @@ REVOKED_DECISION           decision 已被显式撤销（当前系统无撤销�
 STALE_DECISION             decision 过期 / 被更新 decision 取代
 PROMOTED_WITHOUT_DECISION  registry/lifecycle 出现 promoted 状态但没有
                            通过 Guard 的 adoption
+ARTIFACT_DIGEST_MISMATCH   adoption / decision / run / candidate 的
+                           artifact digest 不一致或缺失
+MISSING_DECISION_TIMESTAMP decision.created_at 缺失（fail closed）
 ```
 
 说明：`MISSING_DECISION` / `INVALID_LIFECYCLE` 与 Phase 7.3 冻结 code
@@ -337,25 +342,38 @@ Phase 7.4 契约规定：Adoption Guard 只接受 `decision.value == "PROMOTE"`�
 Adoption Guard 在放行前必须同时满足：
 
 ```text
-1.  PromotionDecision 存在，且 decision.value == PROMOTE
-2.  decision.candidate_id == adoption.candidate_id
-3.  decision.candidate_version == adoption.candidate_version
-4.  decision 引用的 EvaluationRun 存在（RUN_MISSING），且
-    adoption.evaluation_run_id == decision.run_id（RUN_MISMATCH）
-5.  decision.policy_version 存在
-6.  policy 已 registered
-7.  policy 已 frozen
-8.  EvaluationRun 与 policy binding 一致
-    （run.policy_ref == decision.policy_ref；
-     run.policy_version == request.policy_version == policy.version）
-9.  provenance 完整（policy / evidence_manifest / run_ids /
-    immutable_artifact_refs）
-10. candidate lifecycle.status == PROMOTABLE
-11. lifecycle 明确存在 PROMOTABLE -> PROMOTED transition
-12. decision 不是 stale（§8）
-13. candidate 不是 REJECTED（REJECTED 为终态，禁止复活）
-14. 没有新状态覆盖旧授权：decision 未被撤销 / 未被更新 decision
-    supersede（§9）
+1.  PromotionDecision 存在（MISSING_DECISION）
+2.  decision.value == PROMOTE（DECISION_NOT_PROMOTE）
+3.  candidate_id binding：
+    adoption.candidate_id == decision.candidate_id == run.candidate_id
+    （CANDIDATE_ID_MISMATCH）
+4.  candidate_version binding：
+    adoption.candidate_version == decision.candidate_version
+    == run.candidate_version == candidate.version
+    （CANDIDATE_VERSION_MISMATCH）
+5.  decision 引用的 EvaluationRun 存在（RUN_MISSING）
+6.  run binding：
+    adoption.evaluation_run_id == decision.run_id（RUN_MISMATCH）；
+    run.candidate_id == decision.candidate_id == adoption.candidate_id
+    （CANDIDATE_ID_MISMATCH，rule 3 同一检查）
+7.  policy 已 registered（POLICY_NOT_REGISTERED）
+8.  policy 已 frozen（POLICY_NOT_FROZEN）
+9.  run-policy match：
+    run.policy_ref == decision.policy_ref；
+    run.policy_version == request.policy_version == policy.version
+    （RUN_POLICY_MISMATCH）
+10. provenance 完整（policy / evidence_manifest / run_ids /
+    immutable_artifact_refs；PROVENANCE_INCOMPLETE）
+11. lifecycle 记录存在且 status == PROMOTABLE
+    （MISSING_LIFECYCLE / INVALID_LIFECYCLE）
+12. lifecycle 明确存在 PROMOTABLE -> PROMOTED transition
+    （INVALID_LIFECYCLE）
+13. decision 不是 stale / 未被 revoked
+    （STALE_DECISION / REVOKED_DECISION；§8 / §9）
+14. artifact digest binding：
+    adoption.artifact_digest == decision.artifact_digest
+    == run.artifact_digest == candidate.forged_artifact_digest
+    （ARTIFACT_DIGEST_MISMATCH）
 ```
 
 任一失败：
@@ -363,6 +381,15 @@ Adoption Guard 在放行前必须同时满足：
 ```text
 ADOPTION_BLOCKED + 具体 reason code
 ```
+
+规则 1-13 在 Phase 7.2 / 7.3 契约与离线快照中已可机械检查（FACT）；
+规则 14 是 Phase 7.4.1 新增的最小契约扩展：adoption / decision / run
+增加 `artifact_digest`，candidate 复用真实字段名
+`forged_artifact_digest`（src/forge/capabilityizer.py:111
+`manifest.provenance.forged_artifact_digest`；pilot runtime 已有
+`artifact_digest` 概念，pilot/harness.py:732）。
+14 条规则的“生产 enforcement”（真实 Registry / Runtime 强制）仍全部
+UNKNOWN（§15）。
 
 另加一条 Registry 一致性规则（state-only trust 禁止）：
 
@@ -393,14 +420,14 @@ FACT  Decision 字段没有“有效期”概念（evaluation/promotion.py Promo
       frozen dataclass）。
 ```
 
-因此本阶段定义至少一种可验证规则：
+因此 Phase 7.4 定义 / 沿用以下可机械检查规则：
 
 ```text
 Decision 必须绑定 immutable candidate_version。
 不允许 Decision(candidate v1) 授权 adoption(candidate v2)。
 ```
 
-加上三条可机械检查的 stale 规则：
+加上四条可机械检查的 stale 规则：
 
 ```text
 S1  adoption.candidate_version != decision.candidate_version
@@ -412,6 +439,13 @@ S3  同一 (candidate_id, candidate_version) 下，如果存在比本 decision
     则本 decision 被 supersede，是 STALE_DECISION
 S4  decision.created_at < candidate.created_at -> STALE_DECISION
 ```
+
+历史说明：S4 **不是 Phase 7.4 新增**。Phase 7.3 validator 已经包含
+`decision.created_at < candidate.created_at` 的 stale-timestamp 保护
+（phase7.3/validate_enforcement_contract.py）；Phase 7.4 在 adoption
+边界复用并强化该规则（S2 / S3 的 supersede 检查为 Phase 7.4 扩展；
+S4 缺失 timestamp 时由 Phase 7.4.1 改为 `MISSING_DECISION_TIMESTAMP`
+fail closed，禁止 TypeError crash）。
 
 S3 的意义：v2 的 HOLD/REJECT 不改变 v1 的内容，但改变 v1 的**采用资格**；
 “v1 质量没变”不是“v1 可以上线”的理由，因为系统已经对同一版本线给出
@@ -552,7 +586,7 @@ Decision Authority    = Control Plane（只签发 decision，不拥有写权限�
 | # | 绕过路径 | CURRENT FACT | TARGET CONTROL | REMAINING UNKNOWN |
 | --- | --- | --- | --- | --- |
 | 1 | Candidate → Registry 直接写入 | FACT：`registry.promote()` 无 decision 参数（pilot/registry.py:17-42）；任何调用者可传任意 evaluation | Registry 写 guard：只接受带合法 AdoptionRequest 的迁移；entry 必须记录 decision_id + adoption_id | write-once 存储未实现；直接编辑 entry JSON 无法由 app 逻辑拦截 |
-| 2 | Candidate → Runtime 直接采用 | FACT（repo 侧）：`discover()` 只查 state（registry.py:64-76）；`docker_launch` 可跑任意目录（harness.py:35）；promote.py 只发 isActive=False（FACT）。INFERENCE：API 可能支持直接 active；UNKNOWN：Langfuse 服务端是否允许 | Runtime 激活 guard：无合法 decision 绑定则拒绝激活；digest 与 decision/run 比对 | 真实 Agent Runtime 是否另有外部保护，本仓库无法看到 |
+| 2 | Candidate → Runtime 直接采用 | FACT（repo 侧）：`discover()` 只查 state（registry.py:64-71）；`docker_launch` 可跑任意目录（harness.py:35）；promote.py 只发 isActive=False（FACT）。INFERENCE：API 可能支持直接 active；UNKNOWN：Langfuse 服务端是否允许 | Runtime 激活 guard：无合法 decision 绑定则拒绝激活；digest 与 decision/run 比对 | 真实 Agent Runtime 是否另有外部保护，本仓库无法看到 |
 | 3 | Registry API 不校验 PromotionDecision | FACT：promote 签名无 decision | Registry 写 guard：PROMOTED_WITHOUT_DECISION -> ADOPTION_BLOCKED | 同上（write-once） |
 | 4 | Runtime 不校验 adopted version | FACT：discover 只查 state；invoke 不比对 artifact digest / manifest / decision | Runtime guard：验证 candidate/version + decision + artifact digest | 真实 Runtime 的激活边界 |
 | 5 | PromotionDecision 可以脱离 Policy | FACT：promotion.py:237 policy_ref 可选；_policy_gate(None)=NOT_APPLICABLE；policy gate 不在 required（286 行） | Control Plane：PROMOTE 必须带 registered+frozen policy（G1/G2）；Registry/Runtime 重验（POLICY_NOT_REGISTERED / POLICY_NOT_FROZEN） | 旧 `PromotionDecision.decision="PROMOTED"` 的消费端迁移范围 |
@@ -572,9 +606,11 @@ Adoption Guard 遇到以下任一情况：
 ```text
 policy mismatch
 decision missing
+decision timestamp missing（MISSING_DECISION_TIMESTAMP）
 provenance missing
 stale decision
 lifecycle invalid
+artifact digest mismatch（ARTIFACT_DIGEST_MISMATCH）
 registry promoted without decision
 ```
 
@@ -646,6 +682,11 @@ FACT
   - Langfuse label 是人工部署指针；repo 代码只发 isActive=False。
   - Phase 7.2/7.3 离线契约可机械检查（29 / 26 tests）。
   - 本阶段 offline adoption guard contract 可机械检查（§17 测试通过）。
+  - Phase 7.4.1：artifact digest binding（ARTIFACT_DIGEST_MISMATCH）
+    与 decision timestamp fail-closed（MISSING_DECISION_TIMESTAMP）
+    已加入离线契约；candidate digest 复用
+    `forged_artifact_digest`（src/forge/capabilityizer.py:111）。
+  - Phase 7.3 已含 S4 stale-timestamp 保护；Phase 7.4 复用并强化。
 
 INFERENCE
   - Control Plane = decision authority；Registry = state authority；
@@ -718,6 +759,9 @@ docs/archaeology/unified-runtime/phase7.4/test_adoption_guard_design.py
 | registry state=promoted 无 decision | PROMOTED_WITHOUT_DECISION |
 | 旧契约 decision.value == "PROMOTED" | DECISION_NOT_PROMOTE（命名冲突拦截） |
 | request 缺 requested_by 等 | REQUEST_METADATA_MISSING |
+| adoption/decision/run/candidate digest 不一致或缺失 | ARTIFACT_DIGEST_MISMATCH |
+| decision.created_at 缺失 | MISSING_DECISION_TIMESTAMP |
+| all artifact digests match | Allowed（VALID / VALID_WITH_UNKNOWN） |
 
 验证命令（实际运行）：
 
@@ -729,7 +773,7 @@ python3 -m py_compile docs/archaeology/unified-runtime/phase7.4/*.py
 结果（见下节）：
 
 ```text
-offline tests           = 18 passed
+offline tests           = 30 passed
 py_compile              = COMPILE_OK
 documentation consistency = PASS（66 号报告列出全部 code）
 ```
@@ -764,7 +808,7 @@ ADOPTION_GUARD_DESIGN_VALID_WITH_UNKNOWN
 
 ```text
 FACT:
-  offline adoption guard contract 可机械检查（18 passed）；
+  offline adoption guard contract 可机械检查（30 passed）；
   AdoptionRequest / AdoptionResult / 14 项规则 / stale / supersession /
   registry state-only trust 禁令已定义并可离线验证；
   Evaluation 层存在 policy 冻结强制；

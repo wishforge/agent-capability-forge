@@ -61,6 +61,8 @@ BLOCK_CODES = (
     "REVOKED_DECISION",
     "STALE_DECISION",
     "PROMOTED_WITHOUT_DECISION",
+    "ARTIFACT_DIGEST_MISMATCH",
+    "MISSING_DECISION_TIMESTAMP",
 )
 
 
@@ -141,6 +143,19 @@ def validate_adoption_guard(state: dict) -> list[Violation]:
         candidate = (state.get("candidates", {}) or {}).get(cand_id, {})
         prov = request.get("provenance") or (state.get("provenance", {}) or {}).get(cand_id, {})
         lifecycle = _lifecycle(state, cand_id)
+
+        artifact_digests = {
+            "adoption": request.get("artifact_digest"),
+            "decision": decision.get("artifact_digest"),
+            "run": run.get("artifact_digest") if run is not None else None,
+            "candidate": candidate.get("forged_artifact_digest"),
+        }
+        if len(set(artifact_digests.values())) != 1 or not next(iter(artifact_digests.values())):
+            block(
+                "ARTIFACT",
+                "ARTIFACT_DIGEST_MISMATCH "
+                + " ".join(f"{k}={v}" for k, v in artifact_digests.items()),
+            )
 
         if decision.get("value") != "PROMOTE":
             block(
@@ -230,8 +245,17 @@ def validate_adoption_guard(state: dict) -> list[Violation]:
         if _revocation(state, cand_id, cand_ver, decision.get("decision_id")):
             block("LIFECYCLE", f"REVOKED_DECISION decision={decision.get('decision_id')}")
 
+        if not decision.get("created_at"):
+            block(
+                "GATE",
+                f"MISSING_DECISION_TIMESTAMP decision={decision.get('decision_id')}",
+            )
         stale = False
-        if candidate.get("created_at") and decision.get("created_at") < candidate.get("created_at"):
+        if (
+            candidate.get("created_at")
+            and decision.get("created_at")
+            and decision.get("created_at") < candidate.get("created_at")
+        ):
             stale = True
         latest = _latest_promote(state, cand_id, cand_ver)
         if latest is not None and latest.get("decision_id") != decision.get("decision_id"):

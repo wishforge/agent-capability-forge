@@ -1,0 +1,254 @@
+"""Offline tests for the Phase 6-E.7 promotion gate (no provider calls)."""
+
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from provider_probe import (  # noqa: E402
+    PROMOTION_CASE_IDS,
+    PROMOTION_POLICY_ID,
+    evaluate_promotion_gate,
+    promotion_policy,
+    wilson_interval,
+    _promotion_matrix,
+)
+
+
+def _round(
+    case_id: str,
+    arm: str,
+    run_id: int,
+    decision: str,
+    verdict: str | None = None,
+    kind: str | None = None,
+) -> dict:
+    outcome = {"decision": decision}
+    if verdict is not None:
+        outcome.update(
+            final_verdict=verdict,
+            final_confidence="LOW",
+            final_score=None,
+        )
+    if kind is not None:
+        outcome["error_kind"] = kind
+    return {
+        "case_id": case_id,
+        "arm": arm,
+        "run_id": run_id,
+        "outcome": outcome,
+        "artifact": "tests/raw.json",
+    }
+
+
+def _rows_for_case(
+    case_id: str,
+    *,
+    baseline: list[dict],
+    candidate: list[dict],
+) -> list[dict]:
+    return [
+        _round(case_id, "baseline", i + 1, **row)
+        for i, row in enumerate(baseline)
+    ] + [
+        _round(case_id, "candidate", i + 1, **row)
+        for i, row in enumerate(candidate)
+    ]
+
+
+def _promote_rows() -> list[dict]:
+    rows: list[dict] = []
+    rows += _rows_for_case(
+        "CAL-26",
+        baseline=[{"decision": "REJECT", "kind": "INVALID_OUTPUT"}] * 10,
+        candidate=[{"decision": "ACCEPT", "verdict": "INCONCLUSIVE"}] * 10,
+    )
+    for case_id in ("TASK-JUDGE-01", "CAL-08", "CAL-18"):
+        rows += _rows_for_case(
+            case_id,
+            baseline=[{"decision": "ACCEPT", "verdict": "PASS"}] * 10,
+            candidate=[{"decision": "ACCEPT", "verdict": "PASS"}] * 10,
+        )
+    for case_id in ("TASK-JUDGE-07", "CAL-41"):
+        rows += _rows_for_case(
+            case_id,
+            baseline=[{"decision": "ACCEPT", "verdict": "PASS"}] * 5,
+            candidate=[{"decision": "ACCEPT", "verdict": "PASS"}] * 5,
+        )
+    for case_id in ("TASK-JUDGE-03", "CAL-11"):
+        rows += _rows_for_case(
+            case_id,
+            baseline=[{"decision": "ACCEPT", "verdict": "FAIL"}] * 5,
+            candidate=[{"decision": "ACCEPT", "verdict": "FAIL"}] * 5,
+        )
+    return rows
+
+
+def _gate(rows: list[dict], **kwargs) -> dict:
+    return evaluate_promotion_gate(
+        _promotion_matrix(rows),
+        policy_frozen=kwargs.pop("policy_frozen", True),
+        e6_decision=kwargs.pop("e6_decision", "REGRESSION_SAFETY_CONFIRMED"),
+        **kwargs,
+    )
+
+
+def test_wilson_interval_known_values():
+    low, high = wilson_interval(10, 10)
+    assert abs(low - 0.722) < 0.001
+    assert high == 1.0
+    low, high = wilson_interval(0, 10)
+    assert low == 0.0
+    assert abs(high - 0.278) < 0.001
+    low, high = wilson_interval(9, 10)
+    assert abs(low - 0.596) < 0.001
+    assert abs(high - 0.982) < 0.001
+    assert wilson_interval(0, 0) is None
+
+
+def test_policy_is_pre_registered_and_self_consistent():
+    policy = promotion_policy()
+    assert policy["policy_id"] == PROMOTION_POLICY_ID
+    assert policy["policy_version"] == "1"
+    assert policy["rate_rules"]
+    assert json.loads(json.dumps(policy)) == policy
+    required = {"rule_id", "case_set", "arm", "metric", "op", "threshold"}
+    for rule in policy["rate_rules"]:
+        assert required <= set(rule)
+    assert policy["decision_semantics"]["PROMOTE"]
+    assert policy["decision_semantics"]["HOLD"]
+    assert policy["decision_semantics"]["REJECT"]
+
+
+def test_gate_promotes_when_all_pre_registered_rules_pass():
+    gate = _gate(_promote_rows())
+    assert gate["decision"] == "PROMOTE"
+    assert gate["sample_sufficient"] is True
+    assert gate["provider_instability"] is False
+    assert not gate["reject_conditions"]
+    assert not gate["hold_conditions"]
+
+
+def test_gate_holds_on_candidate_over_abstention():
+    rows = _promote_rows()
+    rows += _rows_for_case(
+        "CAL-08",
+        baseline=[{"decision": "ACCEPT", "verdict": "PASS"}] * 10,
+        candidate=(
+            [{"decision": "ACCEPT", "verdict": "INCONCLUSIVE"}] * 5
+            + [{"decision": "ACCEPT", "verdict": "PASS"}] * 5
+        ),
+    )
+    gate = _gate(rows)
+    assert gate["decision"] == "HOLD"
+    assert any(
+        rule["rule_id"] == "suspicious_candidate_stable"
+        and rule["status"] == "FAIL"
+        for rule in gate["rules"]
+    )
+
+
+def test_gate_rejects_stable_pass_fail():
+    rows = _promote_rows()
+    rows += _rows_for_case(
+        "TASK-JUDGE-01",
+        baseline=[{"decision": "ACCEPT", "verdict": "PASS"}] * 10,
+        candidate=(
+            [{"decision": "ACCEPT", "verdict": "PASS"}] * 9
+            + [{"decision": "ACCEPT", "verdict": "FAIL"}]
+        ),
+    )
+    gate = _gate(rows)
+    assert gate["decision"] == "REJECT"
+    assert "candidate_stable_pass_regression:TASK-JUDGE-01" in gate[
+        "reject_conditions"
+    ]
+
+
+def test_gate_rejects_critical_control_pass():
+    rows = _promote_rows()
+    rows += _rows_for_case(
+        "TASK-JUDGE-03",
+        baseline=[{"decision": "ACCEPT", "verdict": "FAIL"}] * 5,
+        candidate=(
+            [{"decision": "ACCEPT", "verdict": "FAIL"}] * 4
+            + [{"decision": "ACCEPT", "verdict": "PASS"}]
+        ),
+    )
+    gate = _gate(rows)
+    assert gate["decision"] == "REJECT"
+    assert "candidate_critical_safety_regression:TASK-JUDGE-03" in gate[
+        "reject_conditions"
+    ]
+
+
+def test_gate_rejects_candidate_invalid_output_on_target():
+    rows = _promote_rows()
+    rows += _rows_for_case(
+        "CAL-26",
+        baseline=[{"decision": "REJECT", "kind": "INVALID_OUTPUT"}] * 10,
+        candidate=(
+            [{"decision": "ACCEPT", "verdict": "INCONCLUSIVE"}] * 9
+            + [{"decision": "REJECT", "kind": "INVALID_OUTPUT"}]
+        ),
+    )
+    gate = _gate(rows)
+    assert gate["decision"] == "REJECT"
+    assert "candidate_invalid_output:CAL-26" in gate["reject_conditions"]
+
+
+def test_gate_holds_on_insufficient_sample():
+    rows = _promote_rows()
+    rows += _rows_for_case(
+        "CAL-26",
+        baseline=[{"decision": "REJECT", "kind": "INVALID_OUTPUT"}] * 10,
+        candidate=(
+            [{"decision": "ACCEPT", "verdict": "INCONCLUSIVE"}] * 9
+            + [{"decision": "REJECT", "kind": "TIMEOUT"}]
+        ),
+    )
+    gate = _gate(rows)
+    assert gate["decision"] == "HOLD"
+    assert "insufficient_sample" in gate["hold_conditions"]
+    assert gate["sample_sufficient"] is False
+
+
+def test_gate_holds_on_transport_instability():
+    rows = _promote_rows()
+    rows += _rows_for_case(
+        "TASK-JUDGE-07",
+        baseline=[{"decision": "ACCEPT", "verdict": "PASS"}] * 5,
+        candidate=(
+            [{"decision": "ACCEPT", "verdict": "PASS"}] * 3
+            + [{"decision": "REJECT", "kind": "TIMEOUT"}] * 2
+        ),
+    )
+    gate = _gate(rows)
+    assert gate["decision"] == "HOLD"
+    assert "provider_instability_transport" in gate["hold_conditions"]
+
+
+def test_gate_rejects_when_policy_changed_post_hoc():
+    gate = _gate(_promote_rows(), policy_frozen=False)
+    assert gate["decision"] == "REJECT"
+    assert "policy_changed_post_hoc" in gate["reject_conditions"]
+
+
+def test_gate_rejects_without_e6_confirmation():
+    gate = _gate(_promote_rows(), e6_decision="INSUFFICIENT_EVIDENCE")
+    assert gate["decision"] == "REJECT"
+    assert any(
+        condition.startswith("e6_gate_not_confirmed")
+        for condition in gate["reject_conditions"]
+    )
+
+
+def test_promotion_scope_covers_target_suspicious_and_controls():
+    assert "CAL-26" in PROMOTION_CASE_IDS
+    assert {"TASK-JUDGE-01", "CAL-08", "CAL-18"} <= set(PROMOTION_CASE_IDS)
+    assert {"TASK-JUDGE-07", "CAL-41", "TASK-JUDGE-03", "CAL-11"} <= set(
+        PROMOTION_CASE_IDS
+    )

@@ -1,0 +1,67 @@
+{
+  "manifest_id": "promotion-gate-e7-manifest-1",
+  "policy_ref": "promotion-policy-e7-v1",
+  "candidate_id": "prompt-b-v2-candidate-1",
+  "policy_written_at_git_commit": "3f3d6c7955f070ea722d1a1ae412a9cd1ab49610",
+  "fixed_conditions": {
+    "dataset_id": "calibration:phase6d:procurement",
+    "dataset_version": "2",
+    "provider": "model_studio",
+    "model": "qwen3.7-plus",
+    "baseline_prompt_id": "prompt:phase6b:judge:B:v1",
+    "candidate_prompt_id": "prompt:phase6b:judge:B-prime:v1",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 8192,
+    "timeout": 120.0,
+    "response_format": {
+      "type": "json_object"
+    },
+    "parser": "judge_provider._parse",
+    "contract": "contract_guard"
+  },
+  "schedule": [
+    {
+      "case_id": "CAL-26",
+      "stratum": "target",
+      "n_rounds_per_arm": 10
+    },
+    {
+      "case_id": "TASK-JUDGE-01",
+      "stratum": "suspicious_stable_pass",
+      "n_rounds_per_arm": 10
+    },
+    {
+      "case_id": "CAL-08",
+      "stratum": "suspicious_stable_pass",
+      "n_rounds_per_arm": 10
+    },
+    {
+      "case_id": "CAL-18",
+      "stratum": "suspicious_stable_pass",
+      "n_rounds_per_arm": 10
+    },
+    {
+      "case_id": "TASK-JUDGE-07",
+      "stratum": "stable_pass_control",
+      "n_rounds_per_arm": 5
+    },
+    {
+      "case_id": "CAL-41",
+      "stratum": "stable_pass_control",
+      "n_rounds_per_arm": 5
+    },
+    {
+      "case_id": "TASK-JUDGE-03",
+      "stratum": "critical_fail_control",
+      "n_rounds_per_arm": 5
+    },
+    {
+      "case_id": "CAL-11",
+      "stratum": "critical_fail_control",
+      "n_rounds_per_arm": 5
+    }
+  ],
+  "arm_order": "alternating per round: odd rounds B then B-prime; even rounds B-prime then B",
+  "replacement_policy": "failed attempts replaced same-arm same-round up to 2 times; un-replaced failure makes that case-arm sample-insufficient"
+}

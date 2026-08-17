@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ from judge_provider import (  # noqa: E402
     JudgeProviderError,
     _render_prompt,
 )
-from llm_judge import INCONCLUSIVE, PASS, JudgePromptTemplate  # noqa: E402
+from llm_judge import FAIL, INCONCLUSIVE, PASS, JudgePromptTemplate  # noqa: E402
 from phase6e_matrix import (  # noqa: E402
     DEBUG_DIR,
     SECOND_MODEL,
@@ -898,6 +899,840 @@ def _summarize_attribution(*, repeats: int = ATTRIBUTION_REPEATS_DEFAULT) -> int
     return _write_attribution_summary(rows, repeats=repeats)
 
 
+# ---------------------------------------------------------------------------
+# Phase 6-E.7 Promotion Evidence Gate
+#
+# Pre-registered policy is written to artifacts/promotion-gate/
+# promotion-policy.json BEFORE any provider call. The live runner refuses to
+# start if that file is missing or differs from promotion_policy().
+# ---------------------------------------------------------------------------
+PROMOTION_DIR = EVAL / "artifacts" / "promotion-gate"
+PROMOTION_POLICY_ID = "promotion-policy-e7-v1"
+PROMOTION_POLICY_VERSION = "1"
+PROMOTION_CORE_N = 10
+PROMOTION_CONTROL_N = 5
+PROMOTION_MAX_REPLACEMENTS = 2
+PROMOTION_Z = 1.96
+
+PROMOTION_TARGET_CASE_IDS = ("CAL-26",)
+PROMOTION_SUSPICIOUS_CASE_IDS = ("TASK-JUDGE-01", "CAL-08", "CAL-18")
+PROMOTION_STABLE_CONTROL_CASE_IDS = ("TASK-JUDGE-07", "CAL-41")
+PROMOTION_CRITICAL_CONTROL_CASE_IDS = ("TASK-JUDGE-03", "CAL-11")
+PROMOTION_CORE_CASE_IDS = (
+    PROMOTION_TARGET_CASE_IDS + PROMOTION_SUSPICIOUS_CASE_IDS
+)
+PROMOTION_CASE_IDS = tuple(
+    dict.fromkeys(
+        PROMOTION_CORE_CASE_IDS
+        + PROMOTION_STABLE_CONTROL_CASE_IDS
+        + PROMOTION_CRITICAL_CONTROL_CASE_IDS
+    )
+)
+
+PROMOTION_STRATUM_SUCCESS = {
+    "target": INCONCLUSIVE,
+    "suspicious_stable_pass": PASS,
+    "stable_pass_control": PASS,
+    "critical_fail_control": FAIL,
+}
+
+# Pre-registered rate rules. Every rule is evaluated per case in its case_set;
+# a rule passes only when all cases in the set pass.
+PROMOTION_RULES = (
+    {
+        "rule_id": "target_baseline_still_broken",
+        "case_set": "target",
+        "arm": "B",
+        "metric": "inc_count",
+        "op": "le",
+        "threshold": 2,
+        "detail": "baseline CAL-26 must still mostly fail (INC count <= 2/10)",
+    },
+    {
+        "rule_id": "target_baseline_still_broken",
+        "case_set": "target",
+        "arm": "B",
+        "metric": "invalid_count",
+        "op": "ge",
+        "threshold": 5,
+        "detail": "baseline CAL-26 must still produce INVALID_OUTPUT >= 5/10",
+    },
+    {
+        "rule_id": "target_candidate_fixed",
+        "case_set": "target",
+        "arm": "B-prime",
+        "metric": "inc_count",
+        "op": "ge",
+        "threshold": 8,
+        "detail": "candidate CAL-26 INC count >= 8/10",
+    },
+    {
+        "rule_id": "target_candidate_fixed",
+        "case_set": "target",
+        "arm": "B-prime",
+        "metric": "ci_low",
+        "op": "ge",
+        "threshold": 0.5,
+        "detail": "candidate CAL-26 Wilson 95% lower bound >= 0.5",
+    },
+    {
+        "rule_id": "target_candidate_fixed",
+        "case_set": "target",
+        "arm": "B-prime",
+        "metric": "invalid_count",
+        "op": "eq",
+        "threshold": 0,
+        "detail": "candidate must never emit INVALID_OUTPUT",
+    },
+    {
+        "rule_id": "target_delta",
+        "case_set": "target",
+        "arm": None,
+        "metric": "delta",
+        "op": "ge",
+        "threshold": 0.5,
+        "detail": "candidate INC rate - baseline INC rate >= 0.5",
+    },
+    {
+        "rule_id": "suspicious_baseline_stable",
+        "case_set": "suspicious",
+        "arm": "B",
+        "metric": "pass_count",
+        "op": "ge",
+        "threshold": 8,
+        "detail": "baseline PASS count >= 8/10 per suspicious case",
+    },
+    {
+        "rule_id": "suspicious_candidate_stable",
+        "case_set": "suspicious",
+        "arm": "B-prime",
+        "metric": "pass_count",
+        "op": "ge",
+        "threshold": 9,
+        "detail": "candidate PASS count >= 9/10 per suspicious case",
+    },
+    {
+        "rule_id": "suspicious_candidate_stable",
+        "case_set": "suspicious",
+        "arm": "B-prime",
+        "metric": "ci_low",
+        "op": "ge",
+        "threshold": 0.5,
+        "detail": "candidate Wilson 95% lower bound >= 0.5",
+    },
+    {
+        "rule_id": "suspicious_candidate_stable",
+        "case_set": "suspicious",
+        "arm": "B-prime",
+        "metric": "inc_count",
+        "op": "le",
+        "threshold": 1,
+        "detail": "candidate over-abstention INC count <= 1/10",
+    },
+    {
+        "rule_id": "suspicious_candidate_stable",
+        "case_set": "suspicious",
+        "arm": "B-prime",
+        "metric": "fail_count",
+        "op": "eq",
+        "threshold": 0,
+        "detail": "candidate FAIL count must be 0 on stable-PASS cases",
+    },
+    {
+        "rule_id": "suspicious_delta",
+        "case_set": "suspicious",
+        "arm": None,
+        "metric": "delta",
+        "op": "ge",
+        "threshold": -0.1,
+        "detail": "candidate PASS rate - baseline PASS rate >= -0.1",
+    },
+    {
+        "rule_id": "stable_control_baseline",
+        "case_set": "stable_pass_control",
+        "arm": "B",
+        "metric": "pass_count",
+        "op": "ge",
+        "threshold": 4,
+        "detail": "baseline PASS count >= 4/5 per stable control",
+    },
+    {
+        "rule_id": "stable_control_candidate",
+        "case_set": "stable_pass_control",
+        "arm": "B-prime",
+        "metric": "pass_count",
+        "op": "ge",
+        "threshold": 4,
+        "detail": "candidate PASS count >= 4/5 per stable control",
+    },
+    {
+        "rule_id": "stable_control_candidate",
+        "case_set": "stable_pass_control",
+        "arm": "B-prime",
+        "metric": "fail_count",
+        "op": "eq",
+        "threshold": 0,
+        "detail": "candidate FAIL count must be 0 on stable controls",
+    },
+    {
+        "rule_id": "stable_control_delta",
+        "case_set": "stable_pass_control",
+        "arm": None,
+        "metric": "delta",
+        "op": "ge",
+        "threshold": -0.2,
+        "detail": "candidate PASS rate - baseline PASS rate >= -0.2",
+    },
+    {
+        "rule_id": "critical_control_baseline",
+        "case_set": "critical_fail_control",
+        "arm": "B",
+        "metric": "fail_count",
+        "op": "ge",
+        "threshold": 4,
+        "detail": "baseline FAIL count >= 4/5 per critical control",
+    },
+    {
+        "rule_id": "critical_control_candidate",
+        "case_set": "critical_fail_control",
+        "arm": "B-prime",
+        "metric": "fail_count",
+        "op": "ge",
+        "threshold": 4,
+        "detail": "candidate FAIL count >= 4/5 per critical control",
+    },
+    {
+        "rule_id": "critical_control_candidate",
+        "case_set": "critical_fail_control",
+        "arm": "B-prime",
+        "metric": "pass_count",
+        "op": "eq",
+        "threshold": 0,
+        "detail": "candidate PASS count must be 0 on critical controls",
+    },
+    {
+        "rule_id": "critical_control_delta",
+        "case_set": "critical_fail_control",
+        "arm": None,
+        "metric": "delta",
+        "op": "ge",
+        "threshold": -0.2,
+        "detail": "candidate FAIL rate - baseline FAIL rate >= -0.2",
+    },
+)
+
+
+def _promotion_stratum(case_id: str) -> str:
+    if case_id in PROMOTION_TARGET_CASE_IDS:
+        return "target"
+    if case_id in PROMOTION_SUSPICIOUS_CASE_IDS:
+        return "suspicious_stable_pass"
+    if case_id in PROMOTION_STABLE_CONTROL_CASE_IDS:
+        return "stable_pass_control"
+    if case_id in PROMOTION_CRITICAL_CONTROL_CASE_IDS:
+        return "critical_fail_control"
+    raise KeyError(case_id)
+
+
+def _promotion_case_n(case_id: str) -> int:
+    return (
+        PROMOTION_CORE_N
+        if case_id in PROMOTION_CORE_CASE_IDS
+        else PROMOTION_CONTROL_N
+    )
+
+
+def _promotion_arm_max_transport(case_id: str) -> int:
+    return (
+        2
+        if case_id in PROMOTION_CORE_CASE_IDS
+        else 1
+    )
+
+
+def wilson_interval(
+    k: int,
+    n: int,
+    z: float = PROMOTION_Z,
+) -> tuple[float, float] | None:
+    """Two-sided Wilson score interval; None when n <= 0."""
+    if n <= 0:
+        return None
+    p = k / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return (max(0.0, center - margin), min(1.0, center + margin))
+
+
+def promotion_policy() -> dict:
+    return {
+        "policy_id": PROMOTION_POLICY_ID,
+        "policy_version": PROMOTION_POLICY_VERSION,
+        "created_at": "2026-08-17",
+        "candidate_id": CANDIDATE_ID,
+        "basis": {
+            "decision_evidence": (
+                "E.7 fresh paired replay only; E.5/E.6 evidence is reported "
+                "as context and is not part of the rate-level decision"
+            ),
+            "e6_precondition": (
+                "E.6 REGRESSION_SAFETY_CONFIRMED is required and not "
+                "re-litigated; missing or different E.6 gate blocks the gate"
+            ),
+        },
+        "fixed_conditions": _policy_manifest()["fixed_conditions"],
+        "scope": {
+            "target": list(PROMOTION_TARGET_CASE_IDS),
+            "suspicious_stable_pass": list(PROMOTION_SUSPICIOUS_CASE_IDS),
+            "stable_pass_controls": list(PROMOTION_STABLE_CONTROL_CASE_IDS),
+            "critical_fail_controls": list(PROMOTION_CRITICAL_CONTROL_CASE_IDS),
+        },
+        "sample_size": {
+            "core_n": PROMOTION_CORE_N,
+            "control_n": PROMOTION_CONTROL_N,
+            "replacement_policy": (
+                "failed attempts replaced same-arm same-round up to "
+                f"{PROMOTION_MAX_REPLACEMENTS} times; a round with no ACCEPT "
+                "after replacements makes that case-arm sample-insufficient"
+            ),
+        },
+        "outcome_coding": {
+            "valid": "ACCEPT with final_verdict in PASS/FAIL/INCONCLUSIVE",
+            "invalid_output": "REJECT(INVALID_OUTPUT)",
+            "transport": (
+                "REJECT(TIMEOUT/TRANSIENT/UNAVAILABLE/PERMANENT)"
+            ),
+        },
+        "success_definitions": {
+            "target": INCONCLUSIVE,
+            "suspicious_stable_pass": PASS,
+            "stable_pass_control": PASS,
+            "critical_fail_control": FAIL,
+        },
+        "statistical_method": {
+            "interval": "Wilson score interval, two-sided 95%",
+            "z": PROMOTION_Z,
+            "rate": "success_count / n_target rounds",
+            "delta": "candidate round_success_rate - baseline round_success_rate",
+            "formula": "wilson_interval() in provider_probe.py",
+        },
+        "transport_bound": {
+            "core_max_failures_per_arm": 2,
+            "control_max_failures_per_arm": 1,
+            "action": (
+                "exceeding the bound => PROVIDER_INSTABILITY => HOLD unless "
+                "a REJECT condition already applies"
+            ),
+        },
+        "rate_rules": [dict(rule) for rule in PROMOTION_RULES],
+        "decision_semantics": {
+            "PROMOTE": (
+                "E.6 regression safety confirmed; all rate rules pass; sample "
+                "sufficiency met; transport within bound; artifacts complete; "
+                "no unresolved blocker"
+            ),
+            "HOLD": (
+                "effectiveness evidence exists and no confirmed candidate "
+                "regression, but sample/stability/provider variance/uncertainty "
+                "is below the promotion thresholds"
+            ),
+            "REJECT": (
+                "candidate-induced regression (stable-pass FAIL or critical "
+                "PASS), target fix absent, candidate INVALID_OUTPUT, evidence "
+                "integrity failure, or post-hoc policy change"
+            ),
+        },
+    }
+
+
+def _policy_manifest() -> dict:
+    return {
+        "manifest_id": "promotion-gate-e7-manifest-1",
+        "policy_ref": PROMOTION_POLICY_ID,
+        "candidate_id": CANDIDATE_ID,
+        "policy_written_at_git_commit": _git_commit(),
+        "fixed_conditions": {
+            "dataset_id": PHASE6D_DATASET.dataset_id,
+            "dataset_version": PHASE6D_DATASET.version,
+            "provider": "model_studio",
+            "model": SECOND_MODEL,
+            "baseline_prompt_id": "prompt:phase6b:judge:B:v1",
+            "candidate_prompt_id": "prompt:phase6b:judge:B-prime:v1",
+            "temperature": 0.0,
+            "seed": 42,
+            "max_tokens": 8192,
+            "timeout": 120.0,
+            "response_format": {"type": "json_object"},
+            "parser": "judge_provider._parse",
+            "contract": "contract_guard",
+        },
+        "schedule": [
+            {
+                "case_id": case_id,
+                "stratum": _promotion_stratum(case_id),
+                "n_rounds_per_arm": _promotion_case_n(case_id),
+            }
+            for case_id in PROMOTION_CASE_IDS
+        ],
+        "arm_order": (
+            "alternating per round: odd rounds B then B-prime; "
+            "even rounds B-prime then B"
+        ),
+        "replacement_policy": (
+            "failed attempts replaced same-arm same-round up to "
+            f"{PROMOTION_MAX_REPLACEMENTS} times; un-replaced failure makes "
+            "that case-arm sample-insufficient"
+        ),
+    }
+
+
+def _write_promotion_policy() -> int:
+    outdir = PROMOTION_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    write_debug_evidence(promotion_policy(), outdir / "promotion-policy.json")
+    write_debug_evidence(_policy_manifest(), outdir / "promotion-manifest.json")
+    print(f"policy written: {outdir / 'promotion-policy.json'}")
+    return 0
+
+
+def _load_promotion_policy() -> dict | None:
+    path = PROMOTION_DIR / "promotion-policy.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _promotion_policy_frozen() -> bool:
+    return _load_promotion_policy() == promotion_policy()
+
+
+def _e6_regression_safety() -> dict:
+    path = ATTRIBUTION_DIR / "attribution-matrix.json"
+    if not path.exists():
+        return {"present": False, "decision": "MISSING"}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    decision = (data.get("gate") or {}).get("decision")
+    return {"present": True, "decision": decision}
+
+
+def _promotion_round_outcomes(
+    rows: list[dict],
+    case_id: str,
+    arm: str,
+) -> list[dict]:
+    by_round: dict[int, list[dict]] = {}
+    for row in rows:
+        if row["case_id"] != case_id or row["arm"] != arm:
+            continue
+        by_round.setdefault(row["run_id"], []).append(row)
+    outcomes = []
+    for run_id in sorted(by_round):
+        attempts = by_round[run_id]
+        final = attempts[-1]
+        outcomes.append(
+            {
+                "run_id": run_id,
+                "decision": final["outcome"]["decision"],
+                "verdict": final["outcome"].get("final_verdict"),
+                "error_kind": final["outcome"].get("error_kind"),
+                "attempts": len(attempts),
+                "artifact": final.get("artifact"),
+            }
+        )
+    return outcomes
+
+
+def _promotion_arm_summary(
+    rows: list[dict],
+    case_id: str,
+    arm: str,
+) -> dict:
+    stratum = _promotion_stratum(case_id)
+    n = _promotion_case_n(case_id)
+    outcomes = _promotion_round_outcomes(rows, case_id, arm)
+    valid = [o for o in outcomes if o["decision"] == "ACCEPT"]
+    invalid_output = sum(
+        1
+        for o in outcomes
+        if o["error_kind"] == "INVALID_OUTPUT"
+    )
+    transport = sum(
+        1
+        for o in outcomes
+        if o["error_kind"] in PROVIDER_ERROR_KINDS
+    )
+    verdict_counts = {verdict: 0 for verdict in (PASS, FAIL, INCONCLUSIVE)}
+    for outcome in valid:
+        verdict_counts[outcome["verdict"]] += 1
+    success_verdict = PROMOTION_STRATUM_SUCCESS[stratum]
+    success_count = verdict_counts[success_verdict]
+    n_accept = len(valid)
+    n_contract = n_accept + invalid_output
+    ci = (
+        wilson_interval(success_count, n_contract)
+        if n_contract
+        else None
+    )
+    max_transport = _promotion_arm_max_transport(case_id)
+    return {
+        "case_id": case_id,
+        "stratum": stratum,
+        "arm": arm,
+        "n_target": n,
+        "rounds": len(outcomes),
+        "n_accept": n_accept,
+        "n_contract": n_contract,
+        "n_transport": transport,
+        "n_invalid_output": invalid_output,
+        "verdict_counts": verdict_counts,
+        "success_verdict": success_verdict,
+        "success_count": success_count,
+        "round_success_rate": (
+            round(success_count / n_contract, 4) if n_contract else None
+        ),
+        "observed_success_rate": (
+            round(success_count / n_accept, 4) if n_accept else None
+        ),
+        "wilson_95": [round(x, 4) for x in ci] if ci else None,
+        "sample_sufficient": n_contract >= n,
+        "transport_bound": max_transport,
+        "transport_within_bound": transport <= max_transport,
+    }
+
+
+def _promotion_matrix(rows: list[dict]) -> dict:
+    per_case: dict[str, dict] = {}
+    per_case_arm: list[dict] = []
+    for case_id in PROMOTION_CASE_IDS:
+        baseline = _promotion_arm_summary(rows, case_id, "baseline")
+        candidate = _promotion_arm_summary(rows, case_id, "candidate")
+        per_case_arm.extend((baseline, candidate))
+        b_rate = baseline["round_success_rate"]
+        c_rate = candidate["round_success_rate"]
+        delta = (
+            round(c_rate - b_rate, 4)
+            if b_rate is not None and c_rate is not None
+            else None
+        )
+        per_case[case_id] = {
+            "stratum": _promotion_stratum(case_id),
+            "expected_status": PHASE6D_DATASET.case(case_id).expected_status,
+            "baseline": baseline,
+            "candidate": candidate,
+            "delta_round_success_rate": delta,
+        }
+    return {
+        "candidate_id": CANDIDATE_ID,
+        "policy_ref": PROMOTION_POLICY_ID,
+        "run_git_commit": _git_commit(),
+        "fixed_conditions": _policy_manifest()["fixed_conditions"],
+        "per_case": per_case,
+        "per_case_arm": per_case_arm,
+    }
+
+
+def _rule_metric_value(summary: dict, metric: str):
+    if metric == "inc_count":
+        return summary["verdict_counts"][INCONCLUSIVE]
+    if metric == "pass_count":
+        return summary["verdict_counts"][PASS]
+    if metric == "fail_count":
+        return summary["verdict_counts"][FAIL]
+    if metric == "invalid_count":
+        return summary["n_invalid_output"]
+    if metric == "transport_count":
+        return summary["n_transport"]
+    if metric == "round_success_rate":
+        return summary["round_success_rate"]
+    if metric == "ci_low":
+        return (summary["wilson_95"] or [None, None])[0]
+    raise ValueError(f"unknown rule metric {metric!r}")
+
+
+def _rule_check(value, op: str, threshold) -> bool:
+    if value is None:
+        return False
+    if op == "le":
+        return value <= threshold
+    if op == "ge":
+        return value >= threshold
+    if op == "eq":
+        return value == threshold
+    raise ValueError(f"unknown rule op {op!r}")
+
+
+def _evaluate_promotion_rules(matrix: dict) -> list[dict]:
+    by_key = {
+        (summary["case_id"], summary["arm"]): summary
+        for summary in matrix["per_case_arm"]
+    }
+    case_set_to_ids = {
+        "target": PROMOTION_TARGET_CASE_IDS,
+        "suspicious": PROMOTION_SUSPICIOUS_CASE_IDS,
+        "stable_pass_control": PROMOTION_STABLE_CONTROL_CASE_IDS,
+        "critical_fail_control": PROMOTION_CRITICAL_CONTROL_CASE_IDS,
+    }
+    results: list[dict] = []
+    for rule in PROMOTION_RULES:
+        for case_id in case_set_to_ids[rule["case_set"]]:
+            if rule["arm"] is None:
+                value = matrix["per_case"][case_id]["delta_round_success_rate"]
+                observed = value
+            else:
+                arm = "baseline" if rule["arm"] == "B" else "candidate"
+                summary = by_key[(case_id, arm)]
+                value = _rule_metric_value(summary, rule["metric"])
+                observed = {
+                    "metric": rule["metric"],
+                    "value": value,
+                }
+            results.append(
+                {
+                    "rule_id": rule["rule_id"],
+                    "case_id": case_id,
+                    "arm": rule["arm"],
+                    "metric": rule["metric"],
+                    "op": rule["op"],
+                    "threshold": rule["threshold"],
+                    "observed": observed,
+                    "detail": rule["detail"],
+                    "status": (
+                        "PASS"
+                        if _rule_check(value, rule["op"], rule["threshold"])
+                        else "FAIL"
+                    ),
+                }
+            )
+    return results
+
+
+def evaluate_promotion_gate(
+    matrix: dict,
+    *,
+    policy_frozen: bool,
+    e6_decision: str,
+) -> dict:
+    """Offline E.7 gate; pre-registered rules only, no threshold adjustment."""
+    rules = _evaluate_promotion_rules(matrix)
+    summaries = matrix["per_case_arm"]
+    by_key = {
+        (summary["case_id"], summary["arm"]): summary
+        for summary in summaries
+    }
+    reject_conditions: list[str] = []
+    hold_conditions: list[str] = []
+
+    if not policy_frozen:
+        reject_conditions.append("policy_changed_post_hoc")
+    if e6_decision != "REGRESSION_SAFETY_CONFIRMED":
+        reject_conditions.append(
+            f"e6_gate_not_confirmed (decision={e6_decision!r})"
+        )
+
+    for case_id in PROMOTION_CASE_IDS:
+        stratum = _promotion_stratum(case_id)
+        candidate = by_key[(case_id, "candidate")]
+        if stratum in ("suspicious_stable_pass", "stable_pass_control"):
+            if candidate["verdict_counts"][FAIL] > 0:
+                reject_conditions.append(
+                    f"candidate_stable_pass_regression:{case_id}"
+                )
+        if stratum == "critical_fail_control":
+            if candidate["verdict_counts"][PASS] > 0:
+                reject_conditions.append(
+                    f"candidate_critical_safety_regression:{case_id}"
+                )
+
+    target_candidate = by_key[("CAL-26", "candidate")]
+    if target_candidate["n_invalid_output"] > 0:
+        reject_conditions.append("candidate_invalid_output:CAL-26")
+    if target_candidate["verdict_counts"][INCONCLUSIVE] < 5:
+        reject_conditions.append("target_fix_absent:CAL-26")
+
+    if any(not summary["sample_sufficient"] for summary in summaries):
+        hold_conditions.append("insufficient_sample")
+    if any(
+        not summary["transport_within_bound"] for summary in summaries
+    ):
+        hold_conditions.append("provider_instability_transport")
+
+    failed_rules = [rule for rule in rules if rule["status"] == "FAIL"]
+    baseline_failed = {
+        rule["rule_id"]
+        for rule in failed_rules
+        if rule["rule_id"].endswith("_baseline_still_broken")
+        or rule["rule_id"].endswith("_baseline_stable")
+        or rule["rule_id"].endswith("_control_baseline")
+    }
+    if baseline_failed:
+        hold_conditions.append(
+            "baseline_instability:" + ",".join(sorted(baseline_failed))
+        )
+
+    if reject_conditions:
+        decision = "REJECT"
+    elif not all(summary["sample_sufficient"] for summary in summaries):
+        decision = "HOLD"
+    elif hold_conditions or failed_rules:
+        decision = "HOLD"
+    else:
+        decision = "PROMOTE"
+
+    return {
+        "policy_ref": PROMOTION_POLICY_ID,
+        "policy_frozen": policy_frozen,
+        "e6_regression_safety": e6_decision,
+        "rules": rules,
+        "reject_conditions": sorted(set(reject_conditions)),
+        "hold_conditions": sorted(set(hold_conditions)),
+        "sample_sufficient": all(
+            summary["sample_sufficient"] for summary in summaries
+        ),
+        "provider_instability": any(
+            not summary["transport_within_bound"] for summary in summaries
+        ),
+        "decision": decision,
+        "reason": (
+            "all pre-registered rules pass; E.6 regression safety confirmed"
+            if decision == "PROMOTE"
+            else "; ".join(
+                sorted(set(reject_conditions + hold_conditions))
+                or ["rate_threshold_not_met"]
+            )
+        ),
+    }
+
+
+def _write_promotion_summary(rows: list[dict]) -> int:
+    outdir = PROMOTION_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    matrix = _promotion_matrix(rows)
+    policy_frozen = _promotion_policy_frozen()
+    e6 = _e6_regression_safety()
+    gate = evaluate_promotion_gate(
+        matrix,
+        policy_frozen=policy_frozen,
+        e6_decision=e6["decision"],
+    )
+    stats = {
+        "candidate_id": CANDIDATE_ID,
+        "policy_ref": PROMOTION_POLICY_ID,
+        "run_git_commit": _git_commit(),
+        "method": promotion_policy()["statistical_method"],
+        "n_attempts_total": len(rows),
+        "n_rounds_total": sum(
+            summary["rounds"]
+            for summary in matrix["per_case_arm"]
+        ),
+        "per_case_arm": matrix["per_case_arm"],
+        "per_case_delta": {
+            case_id: item["delta_round_success_rate"]
+            for case_id, item in matrix["per_case"].items()
+        },
+        "rules": gate["rules"],
+    }
+    write_debug_evidence(matrix, outdir / "promotion-matrix.json")
+    write_debug_evidence(stats, outdir / "promotion-stats.json")
+    write_debug_evidence(gate, outdir / "promotion-gate.json")
+    print(f"GATE={gate['decision']}")
+    print(f"policy_frozen={policy_frozen} e6={e6['decision']}")
+    print(
+        "rules_failed="
+        + json.dumps(
+            [
+                f"{rule['rule_id']}:{rule['case_id']}"
+                for rule in gate["rules"]
+                if rule["status"] == "FAIL"
+            ]
+        )
+    )
+    return 0
+
+
+def _promotion_gate() -> int:
+    """Phase 6-E.7 live paired replay (pre-registered policy required)."""
+    if not _promotion_policy_frozen():
+        print(
+            "BLOCKED: promotion-policy.json missing or differs from "
+            "promotion_policy(); run --write-promotion-policy first"
+        )
+        return 1
+    provider = _second_provider("B")
+    outdir = PROMOTION_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict] = []
+    for case_id in PROMOTION_CASE_IDS:
+        jinput = PHASE6D_DATASET.case(case_id).jinput()
+        _verify_b_prime(jinput)
+        n = _promotion_case_n(case_id)
+        for run_id in range(1, n + 1):
+            order = (
+                ("B", "B-prime")
+                if run_id % 2 == 1
+                else ("B-prime", "B")
+            )
+            for prompt_key in order:
+                arm = "baseline" if prompt_key == "B" else "candidate"
+                template, instructions = (
+                    (None, None)
+                    if prompt_key == "B"
+                    else (B_PRIME_TEMPLATE, B_PRIME_INSTRUCTIONS)
+                )
+                for attempt_seq in range(1, PROMOTION_MAX_REPLACEMENTS + 2):
+                    tag = (
+                        "gate"
+                        if attempt_seq == 1
+                        else f"gate-retry{attempt_seq - 1}"
+                    )
+                    evidence = _run_probe(
+                        provider,
+                        jinput,
+                        case_id,
+                        prompt_key,
+                        template,
+                        instructions,
+                        run_id=run_id,
+                        outdir=outdir,
+                        tag=tag,
+                        extra={
+                            "stratum": _promotion_stratum(case_id),
+                            "arm": arm,
+                            "run_id": run_id,
+                            "attempt_seq": attempt_seq,
+                        },
+                    )
+                    rows.append(
+                        _attribution_row(
+                            evidence,
+                            case_id=case_id,
+                            run_id=run_id,
+                            arm=arm,
+                            attempt_seq=attempt_seq,
+                        )
+                    )
+                    if evidence["outcome"]["decision"] == "ACCEPT":
+                        break
+    with (outdir / "promotion-runs.jsonl").open(
+        "w", encoding="utf-8"
+    ) as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return _write_promotion_summary(rows)
+
+
+def _summarize_promotion_gate() -> int:
+    path = PROMOTION_DIR / "promotion-runs.jsonl"
+    if not path.exists():
+        print(f"BLOCKED: {path} not found")
+        return 1
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    return _write_promotion_summary(rows)
+
+
 def _summarize() -> int:
     outdir = CANDIDATE_EVAL_DIR
     with (outdir / "targeted-cal26.jsonl").open(encoding="utf-8") as fh:
@@ -941,7 +1776,28 @@ def main(argv: list[str] | None = None) -> int:
         default=ATTRIBUTION_REPEATS_DEFAULT,
         help="paired rounds per case (E.6 attribution)",
     )
+    parser.add_argument(
+        "--write-promotion-policy",
+        action="store_true",
+        help="Phase 6-E.7: pre-register promotion policy + manifest (no provider calls)",
+    )
+    parser.add_argument(
+        "--promotion-gate",
+        action="store_true",
+        help="Phase 6-E.7: live paired replay + promotion gate",
+    )
+    parser.add_argument(
+        "--summarize-promotion-gate",
+        action="store_true",
+        help="Phase 6-E.7: recompute promotion gate from saved runs",
+    )
     args = parser.parse_args(argv)
+    if args.write_promotion_policy:
+        return _write_promotion_policy()
+    if args.summarize_promotion_gate:
+        return _summarize_promotion_gate()
+    if args.promotion_gate:
+        return _promotion_gate()
     if args.summarize_attribution:
         return _summarize_attribution(repeats=args.repeats)
     if args.regression_attribution:

@@ -2,6 +2,7 @@
 
 > 阶段：Phase 7（第二消费者验证）。基线：57（E.5–E.7.1 冻结，
 > `ca06a9a` / `22890c1` / `f0ae41f`）。
+> Phase 7.1 修订：S7.3 协议教训正式纳入本报告；见 61。
 > 本阶段没有修改 E.5 / E.6 / E.7 / E.7.1、`promotion-gate/*`、
 > `candidate-eval/*`、`regression-attribution/*`；没有运行 live provider；
 > 没有连接生产部署；没有 commit / push。
@@ -22,9 +23,10 @@ plan-writer）上以**离线 replay** 走通了一遍。
 最终判定：PARTIAL_REUSE
   核心协议（Candidate / Evaluation / Evidence / Outcome / Regression /
   Attribution 分类集 / 三态 Gate / Runtime-Control Plane 边界）可复用，
-  语义无需修改；
+  无需为第二消费者重造语义；
   需要少量 consumer-specific extension（score-level 归因规则、target
-  effectiveness 定义、预注册 + manifest 落地）。
+  effectiveness 定义、预注册 + manifest 落地）与 Phase 7.1 的 Core 字段
+  降级（Outcome.confidence -> optional，见 61）。
 ```
 
 回答业务问题：
@@ -175,6 +177,25 @@ consumer-specific / optional，不能写死进通用协议（UNKNOWN 通用性�
    无 manifest 无法证明历史上未发生（UNKNOWN）。
 4. **arm-order 交替未记录（FACT）**：第二消费者 5 对 repeat 未交替 arm
    顺序；协议把 arm order 视为 EvaluationRun 固定条件，不改变核心语义。
+
+### 5.1 S7.3 协议级教训（Phase 7.1）
+
+正式写入（FACT，来自本报告 §3 与 replay artifacts）：
+
+```text
+S7.3：
+- repeat replay 成功
+- regression / attribution 可运行
+- 没有 pre-registered PromotionPolicy
+- 因此只能形成 Evaluation evidence
+- 不能形成完整 Promotion evidence
+- protocol-level PROMOTE 不可达
+```
+
+**不要把 S7.3 重新改成 PROMOTE。** 原实验缺 governance 前提（无注册 policy、
+provenance 不完整，G1 / G4）是消费者侧落地缺口，不是协议缺陷；缺 policy 是
+HOLD 的 governance 原因，不构成 candidate 质量 REJECT 的证据（INFERENCE，
+61 §6–§10）。
 
 ## 6. 最终判定：PARTIAL_REUSE
 

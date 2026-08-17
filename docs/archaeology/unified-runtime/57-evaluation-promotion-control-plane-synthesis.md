@@ -1,6 +1,8 @@
 # 57 — Evaluation / Promotion Control Plane Synthesis（Phase 7）
 
 > 阶段：Phase 7（架构抽象，非实验阶段）。
+> Phase 7.1 修订：核心语义正式分为 Core / Consumer Extension，并增加
+> Promotion governance prerequisites；见 61。
 > 冻结基线：`ca06a9a`（E.7 pre-register promotion evidence policy）、
 > `22890c1`（E.7 experiment, GATE = HOLD）、`f0ae41f`（E.7.1 policy
 > provenance finalization）。
@@ -217,7 +219,7 @@ FACT-3   证据完整性是 gate 的输入，不是 gate 的装饰。
 | 维度 | 说明 |
 | --- | --- |
 | 业务问题 | 把 attempt 归一化成可聚合的 verdict，并显式区分“有效判定 / 契约无效 / 传输失败”三类结果 |
-| 最小字段 | `outcome_id`、attempt/round ref、`status`（ACCEPT / REJECT）、`verdict`（PASS / FAIL / INCONCLUSIVE）、`confidence`、`score`、`error_kind`（INVALID_OUTPUT / TIMEOUT / TRANSIENT / UNAVAILABLE / PERMANENT）、`coding_scheme_version` |
+| 最小字段 | `outcome_id`、attempt/round ref、`status`（ACCEPT / REJECT）、`verdict`（PASS / FAIL / INCONCLUSIVE）、`confidence`（optional extension，Phase 7.1 降级，见 61）、`score`（optional extension，Phase 7.1）、`error_kind`（INVALID_OUTPUT / TIMEOUT / TRANSIENT / UNAVAILABLE / PERMANENT）、`coding_scheme_version` |
 | 生命周期 | 由 parser + contract guard 派生 → 进入 matrix → 被 rate rules 消费（E.7 `outcome_coding`，FACT） |
 | 谁产生 | parser / contract 层（deterministic），不是模型自己（E.1 guard 是契约，FACT） |
 | 谁消费 | matrix、stats、rate rules、attribution、gate |
@@ -339,6 +341,66 @@ FACT-3   证据完整性是 gate 的输入，不是 gate 的装饰。
 | Attribution | `FailureAttribution` + E.6 归因 policy |
 | PromotionGate / Decision | `decide()` 的 `GateResult` / `PromotionDecision`（promotion.py，FACT） |
 | PromotionPolicy / PolicyVersion / Manifest / Provenance | Phase 6-E 新增（Phase 5-N 只有 `policy_ref` 占位，FACT） |
+
+---
+
+## Core vs Consumer Extension
+
+Phase 7.1 正式修订（61）：协议形态是 **Core Protocol + Consumer Extensions
++ Mandatory Governance Invariants**，不是“一个适用于所有 Agent 的巨大统一
+Schema”。
+
+### Core
+
+只保留第二消费者已经证明可以复用的语义（FACT，60 §6）。对象集合：
+
+```text
+Candidate
+EvaluationRun
+Attempt
+Evidence
+Outcome
+RegressionFinding
+Attribution
+PromotionPolicy
+PromotionGate
+Decision
+PolicyVersion
+ArtifactManifest
+Provenance
+```
+
+每个对象的逐字段分类见 61 §5；本节不重复列表。复核原则：
+
+```text
+CORE               —— 两个消费者都验证成立，或协议治理推导要求
+OPTIONAL_EXTENSION —— consumer 可选提供；Core 不要求
+CONSUMER_SPECIFIC  —— 仅属于某个 consumer 的实例/值/标签
+UNKNOWN            —— 当前证据无法确定，不猜
+```
+
+### Extension
+
+consumer-specific semantics 进入 extension，且必须声明 applicability 与
+provenance（61 §3）。本阶段确认的项：
+
+```text
+Outcome.confidence（Judge consumer 可提供；swe-planner 无此事实）
+Outcome.score（swe-planner 有；第一消费者无）
+CANDIDATE_REGRESSION 判定标准（consumer policy 预注册）
+INVALID_OUTPUT / JUDGE_* 等 outcome 标签
+Model_Studio / qwen3.7-plus / deepseek-v4-flash 等固定条件值
+Wilson / 8-of-10 / -0.1 / CI 0.5 / 44-case matrix 等阈值与实验结构
+CAL-26 / B-prime 等第一消费者实例命名
+```
+
+特别明确（61 §4）：
+
+```text
+Outcome.confidence 从 Core requirement 降级为 optional /
+consumer-specific extension。Core protocol 不允许要求 consumer 提供
+不存在的事实；extension 必须明确 applicability 和 provenance。
+```
 
 ---
 
@@ -467,6 +529,12 @@ E.6 = REGRESSION_SAFETY_CONFIRMED 时，E.7 仍因 rate-level 不达标而 HOLD�
 不允许把不稳定的 INC 解释成 candidate-induced regression。
 ```
 
+Phase 7.1 修订（61 §9）：`CANDIDATE_REGRESSION` 的判定标准由 consumer
+policy 预注册定义（verdict flip / score delta / rate delta / confidence
+interval / other metric）；Core 只要求“有明确的归因规则和证据”。连续 score
+consumer 不被强制使用 verdict-level 100% 翻转；无足够证据时标
+UNKNOWN / INSUFFICIENT_EVIDENCE。
+
 Gate 语义（FACT / INFERENCE 混合）：
 
 ```text
@@ -492,6 +560,8 @@ PROMOTE = 证据足够支持上线。
   rate-level 达标、controls 干净）+ 治理证据（policy 预注册、证据完整、
   provenance 一致）+ 样本充分性 + transport bound + 无 unresolved
   blocker，全部满足（E.7 §2.5，FACT）。
+  Phase 7.1 治理前提（61 §6–§8）：policy_registered / policy_frozen /
+  run_policy_match / provenance_complete 缺一不可 => PROMOTE 不可达。
 
 HOLD = 没有明确证明失败，但证据不足以上线。
   默认态。典型触发：矩阵不完整、样本不足、provider variance、
@@ -513,6 +583,10 @@ Gate 组合规则（INFERENCE，基于 E.5–E.7）：
    => REJECT，不重新诉讼（E.7 policy，FACT）。
 4. Gate 结果一旦归档不可重算覆盖；HOLD 后只能以同一 policy 开新
    EvaluationRun（56 §11，FACT）。
+5. 没有 registered/frozen policy、run 未绑定 policy、或 provenance 不完整
+   => PROMOTE 不可达；默认 HOLD；只有明确 hard blocker（policy 被改、
+   evidence integrity 失败等）才 REJECT。No policy 不自动等于 candidate
+   质量 REJECT（Phase 7.1，61 §8）。
 ```
 
 **明确禁止的简单规则：**
@@ -652,7 +726,8 @@ EVALUATED
 REGRESSION_CHECKED
   ↓   effectiveness 证据存在且无 confirmed regression
 PROMOTION_REVIEW
-  ↓   gate 求值
+  ↓   gate 求值（governance prerequisites：policy_registered /
+      policy_frozen / run_policy_match / provenance_complete）
 PROMOTABLE / HOLD / REJECTED
   ↓   （仅 PROMOTABLE）控制面执行版本采用
 PROMOTED
@@ -673,10 +748,12 @@ REGRESSION_CHECKED -> PROMOTION_REVIEW：
 
 PROMOTION_REVIEW -> PROMOTABLE：
   全部 rate rules + sample sufficiency + transport bound + 证据完整
-  + governance 一致。
+  + governance prerequisites 全部满足（policy_registered /
+  policy_frozen / run_policy_match / provenance_complete）。
 
 PROMOTION_REVIEW -> HOLD：
-  无明确 blocker，但证据/稳定性/样本不足（默认分支）。
+  无明确 blocker，但证据/稳定性/样本不足，或任一 governance
+  prerequisite 缺失（默认分支；包括没有 policy）。
 
 PROMOTION_REVIEW -> REJECTED：
   存在明确 blocker（confirmed regression、target fix 缺失、
@@ -688,6 +765,18 @@ HOLD -> EVALUATING：
 
 REJECTED：
   对该 candidate 版本终态；新候选 = 新 Candidate 版本，从 DRAFT 开始。
+```
+
+Phase 7.1 governance invariants（61 §6）：
+
+```text
+G1  No registered policy                 -> PROMOTE impossible
+G2  Unfrozen policy                      -> PROMOTE impossible
+G3  Run-policy mismatch                  -> PROMOTE impossible
+G4  Incomplete provenance                -> PROMOTE impossible
+G5  Historical evidence immutable
+G6  HOLD retry 必须建立新的 EvaluationRun
+G7  Historical evidence 不允许覆盖
 ```
 
 ---
@@ -782,6 +871,8 @@ MVP-5  对象模型的序列化契约（本文件 §4）
    统计表一致（FACT）。
 3. 本文件内部一致性：对象关系、状态机、Gate 语义与 Phase 6-E 结论
    交叉核对，无新增实验结论（本文件）。
+4. Phase 7.1 文档一致性：61 的章节、57/60 的修订点、Core/Extension 分类
+   与 governance invariants 交叉核对（本阶段离线）。
 ```
 
 STOP：本阶段不 commit、不 push、不运行 live experiment、不做 E.8、

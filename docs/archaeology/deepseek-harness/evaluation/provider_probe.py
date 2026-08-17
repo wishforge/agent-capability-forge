@@ -30,9 +30,10 @@ from judge_provider import (  # noqa: E402
     JudgeProviderError,
     _render_prompt,
 )
-from llm_judge import INCONCLUSIVE, JudgePromptTemplate  # noqa: E402
+from llm_judge import INCONCLUSIVE, PASS, JudgePromptTemplate  # noqa: E402
 from phase6e_matrix import (  # noqa: E402
     DEBUG_DIR,
+    SECOND_MODEL,
     _second_provider,
     write_debug_evidence,
 )
@@ -65,6 +66,18 @@ PROMPTS = (
 )
 CANDIDATE_ID = "prompt-b-v2-candidate-1"
 CANDIDATE_EVAL_DIR = EVAL / "artifacts" / "candidate-eval"
+
+# Phase 6-E.6 regression attribution scope: the three Run 1 anomalies.
+ATTRIBUTION_CASE_IDS = ("TASK-JUDGE-01", "CAL-08", "CAL-18")
+ATTRIBUTION_DIR = EVAL / "artifacts" / "regression-attribution"
+ATTRIBUTION_REPEATS_DEFAULT = 5
+ATTRIBUTION_MAX_REPLACEMENTS = 2
+PROVIDER_ERROR_KINDS = {
+    "TIMEOUT",
+    "TRANSIENT",
+    "UNAVAILABLE",
+    "PERMANENT",
+}
 
 # Phase 6-E.5 regression set from the existing Phase 6-D dataset (v2):
 #   contract cases = every expected-INCONCLUSIVE case (lossy/context/evidence)
@@ -130,6 +143,7 @@ def _run_probe(
     run_id: int | None = None,
     outdir: Path = DEBUG_DIR,
     tag: str = "",
+    extra: dict | None = None,
 ) -> dict:
     try:
         result = provider.judge(
@@ -172,6 +186,8 @@ def _run_probe(
         outcome=outcome,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+    if extra:
+        evidence.update(extra)
     name = "-".join(
         part
         for part in (case_id, "model_studio", prompt_key, tag)
@@ -583,6 +599,305 @@ def _write_summary(targeted: list[dict], regression: list[dict]) -> int:
     return 0
 
 
+def _attribution_row(
+    evidence: dict,
+    *,
+    case_id: str,
+    run_id: int,
+    arm: str,
+    attempt_seq: int,
+) -> dict:
+    """E.6 per-attempt evidence row; raw_response preserved in artifact and row."""
+    outcome = evidence["outcome"]
+    return {
+        "case_id": case_id,
+        "run_id": run_id,
+        "attempt_seq": attempt_seq,
+        "arm": arm,
+        "prompt_key": evidence.get("prompt_key"),
+        "prompt_id": evidence.get("prompt_id"),
+        "prompt_hash": evidence.get("prompt_hash"),
+        "provider": evidence.get("provider"),
+        "model": evidence.get("model"),
+        "temperature": evidence.get("temperature"),
+        "seed": evidence.get("seed"),
+        "max_tokens": (evidence.get("request_metadata") or {}).get("max_tokens"),
+        "timeout": (evidence.get("request_metadata") or {}).get("timeout"),
+        "raw_response": evidence.get("raw_response"),
+        "raw_content": evidence.get("raw_content"),
+        "parsed": evidence.get("parsed"),
+        "contract": evidence.get("contract"),
+        "failure_kind": (
+            outcome.get("error_kind")
+            if outcome.get("decision") == "REJECT"
+            else None
+        ),
+        "outcome": outcome,
+        "timestamp": evidence.get("timestamp"),
+        "artifact": evidence.get("artifact"),
+    }
+
+
+def classify_attribution(
+    baseline_verdicts: list[str],
+    candidate_verdicts: list[str],
+    *,
+    matrix_complete: bool = True,
+    failure_kinds: tuple[str, ...] = (),
+) -> tuple[str, str]:
+    """Pre-registered Phase 6-E.6 attribution policy (strict stable).
+
+    Decision order:
+      1. INSUFFICIENT_EVIDENCE: fresh paired matrix incomplete.
+      2. BASELINE_INSTABILITY: any baseline verdict != PASS over the full
+         identical-condition evidence set.
+      3. CANDIDATE_REGRESSION: baseline all PASS and candidate all
+         INCONCLUSIVE (100% stable divergence; nothing else can explain it).
+      4. PROVIDER_NONDETERMINISM: candidate arm contains both PASS and
+         INCONCLUSIVE (same-arm swing under identical controls), or the
+         anomaly does not reproduce.
+    """
+    if not matrix_complete:
+        return (
+            "INSUFFICIENT_EVIDENCE",
+            f"paired matrix incomplete; failures={sorted(failure_kinds)}",
+        )
+    if any(verdict != PASS for verdict in baseline_verdicts):
+        return (
+            "BASELINE_INSTABILITY",
+            f"baseline not stable PASS: {sorted(set(baseline_verdicts))}",
+        )
+    if candidate_verdicts and all(
+        verdict == INCONCLUSIVE for verdict in candidate_verdicts
+    ):
+        return (
+            "CANDIDATE_REGRESSION",
+            "baseline all PASS and candidate all INCONCLUSIVE under identical controls",
+        )
+    if any(verdict == INCONCLUSIVE for verdict in candidate_verdicts):
+        return (
+            "PROVIDER_NONDETERMINISM",
+            f"candidate arm swings PASS/INCONCLUSIVE: "
+            f"{sorted(set(candidate_verdicts))}",
+        )
+    return (
+        "PROVIDER_NONDETERMINISM",
+        f"anomaly not reproduced: candidate={sorted(set(candidate_verdicts))}",
+    )
+
+
+def _attribution_gate(decisions: dict[str, str]) -> dict:
+    if any(decision == "CANDIDATE_REGRESSION" for decision in decisions.values()):
+        decision = "REGRESSION_CONFIRMED"
+    elif all(
+        decision in ("PROVIDER_NONDETERMINISM", "BASELINE_INSTABILITY")
+        for decision in decisions.values()
+    ):
+        decision = "REGRESSION_SAFETY_CONFIRMED"
+    else:
+        decision = "INSUFFICIENT_EVIDENCE"
+    return {"decision": decision, "per_case": dict(decisions)}
+
+
+def _historical_attribution_rows() -> dict[str, dict[str, list[str]]]:
+    """E.5 Run 1 + Run 2 ACCEPT verdicts for the anomaly cases (identical controls)."""
+    out = {
+        case_id: {"baseline": [], "candidate": []}
+        for case_id in ATTRIBUTION_CASE_IDS
+    }
+    paths = (
+        CANDIDATE_EVAL_DIR / "run1" / "regression.jsonl",
+        CANDIDATE_EVAL_DIR / "regression.jsonl",
+    )
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            if row["case_id"] not in out:
+                continue
+            if row["outcome"].get("decision") != "ACCEPT":
+                continue
+            arm = "baseline" if row["prompt_key"] == "B" else "candidate"
+            out[row["case_id"]][arm].append(row["outcome"].get("final_verdict"))
+    return out
+
+
+def _attribution_matrix(rows: list[dict], *, repeats: int) -> dict:
+    historical = _historical_attribution_rows()
+    per_case: dict[str, dict] = {}
+    for case_id in ATTRIBUTION_CASE_IDS:
+        case_rows = [row for row in rows if row["case_id"] == case_id]
+        valid = {
+            arm: [
+                row
+                for row in case_rows
+                if row["arm"] == arm and row["outcome"].get("decision") == "ACCEPT"
+            ]
+            for arm in ("baseline", "candidate")
+        }
+        failures = [
+            row for row in case_rows if row["outcome"].get("decision") == "REJECT"
+        ]
+        matrix_complete = all(len(valid[arm]) >= repeats for arm in valid)
+        fresh = {
+            arm: [row["outcome"].get("final_verdict") for row in valid[arm]]
+            for arm in valid
+        }
+        combined = {
+            arm: fresh[arm] + historical[case_id][arm] for arm in ("baseline", "candidate")
+        }
+        decision, reason = classify_attribution(
+            combined["baseline"],
+            combined["candidate"],
+            matrix_complete=matrix_complete,
+            failure_kinds=tuple(
+                sorted({row["failure_kind"] for row in failures if row["failure_kind"]})
+            ),
+        )
+        per_case[case_id] = {
+            "expected_status": PASS,
+            "fresh": fresh,
+            "historical": historical[case_id],
+            "combined": combined,
+            "failures": [
+                {
+                    "run_id": row["run_id"],
+                    "arm": row["arm"],
+                    "attempt_seq": row["attempt_seq"],
+                    "failure_kind": row["failure_kind"],
+                    "artifact": row["artifact"],
+                }
+                for row in failures
+            ],
+            "matrix_complete": matrix_complete,
+            "attribution": decision,
+            "reason": reason,
+        }
+    gate = _attribution_gate(
+        {case_id: per_case[case_id]["attribution"] for case_id in ATTRIBUTION_CASE_IDS}
+    )
+    return {"per_case": per_case, "gate": gate}
+
+
+def _write_attribution_summary(rows: list[dict], *, repeats: int) -> int:
+    matrix = _attribution_matrix(rows, repeats=repeats)
+    summary = {
+        "candidate_id": CANDIDATE_ID,
+        "scope": {
+            "case_ids": list(ATTRIBUTION_CASE_IDS),
+            "repeats_per_arm": repeats,
+            "arm_order": "alternating B/B-prime per round",
+            "replacement_policy": (
+                "failed attempts retried same-arm up to "
+                f"{ATTRIBUTION_MAX_REPLACEMENTS} times; un-replaced failure "
+                "=> matrix incomplete"
+            ),
+        },
+        "fixed_conditions": {
+            "dataset_id": PHASE6D_DATASET.dataset_id,
+            "dataset_version": PHASE6D_DATASET.version,
+            "provider": "model_studio",
+            "model": SECOND_MODEL,
+            "baseline_prompt_id": "prompt:phase6b:judge:B:v1",
+            "candidate_prompt_id": "prompt:phase6b:judge:B-prime:v1",
+            "temperature": 0.0,
+            "seed": 42,
+            "max_tokens": 8192,
+            "timeout": 120.0,
+            "response_format": {"type": "json_object"},
+            "git_commit": _git_commit(),
+        },
+        "attribution_policy": {
+            "order": [
+                "INSUFFICIENT_EVIDENCE: fresh paired matrix incomplete",
+                "BASELINE_INSTABILITY: any baseline verdict != PASS over full evidence set",
+                "CANDIDATE_REGRESSION: baseline all PASS and candidate all INCONCLUSIVE (100% stable)",
+                "PROVIDER_NONDETERMINISM: candidate arm swings PASS/INCONCLUSIVE or anomaly not reproduced",
+            ],
+            "evidence_set": "E.5 Run1 + Run2 + E.6 fresh paired attempts (identical controls)",
+        },
+        **matrix,
+    }
+    write_debug_evidence(summary, ATTRIBUTION_DIR / "attribution-matrix.json")
+    print(f"GATE={matrix['gate']['decision']}")
+    for case_id, item in matrix["per_case"].items():
+        print(
+            f"{case_id}: {item['attribution']} "
+            f"fresh_b={item['fresh']['baseline']} fresh_c={item['fresh']['candidate']}"
+        )
+    return 0
+
+
+def _regression_attribution(*, repeats: int = ATTRIBUTION_REPEATS_DEFAULT) -> int:
+    """Phase 6-E.6 minimal paired replay for the three anomaly cases."""
+    provider = _second_provider("B")
+    outdir = ATTRIBUTION_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict] = []
+    for case_id in ATTRIBUTION_CASE_IDS:
+        jinput = PHASE6D_DATASET.case(case_id).jinput()
+        _verify_b_prime(jinput)
+        for run_id in range(1, repeats + 1):
+            order = ("B", "B-prime") if run_id % 2 == 1 else ("B-prime", "B")
+            for prompt_key in order:
+                arm = "baseline" if prompt_key == "B" else "candidate"
+                template, instructions = (
+                    (None, None)
+                    if prompt_key == "B"
+                    else (B_PRIME_TEMPLATE, B_PRIME_INSTRUCTIONS)
+                )
+                for attempt_seq in range(1, ATTRIBUTION_MAX_REPLACEMENTS + 2):
+                    tag = (
+                        "attribution"
+                        if attempt_seq == 1
+                        else f"attribution-retry{attempt_seq - 1}"
+                    )
+                    evidence = _run_probe(
+                        provider,
+                        jinput,
+                        case_id,
+                        prompt_key,
+                        template,
+                        instructions,
+                        run_id=run_id,
+                        outdir=outdir,
+                        tag=tag,
+                        extra={
+                            "arm": arm,
+                            "run_id": run_id,
+                            "attempt_seq": attempt_seq,
+                        },
+                    )
+                    rows.append(
+                        _attribution_row(
+                            evidence,
+                            case_id=case_id,
+                            run_id=run_id,
+                            arm=arm,
+                            attempt_seq=attempt_seq,
+                        )
+                    )
+                    if evidence["outcome"]["decision"] == "ACCEPT":
+                        break
+    with (outdir / "attribution-runs.jsonl").open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return _write_attribution_summary(rows, repeats=repeats)
+
+
+def _summarize_attribution(*, repeats: int = ATTRIBUTION_REPEATS_DEFAULT) -> int:
+    path = ATTRIBUTION_DIR / "attribution-runs.jsonl"
+    if not path.exists():
+        print(f"BLOCKED: {path} not found")
+        return 1
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    return _write_attribution_summary(rows, repeats=repeats)
+
+
 def _summarize() -> int:
     outdir = CANDIDATE_EVAL_DIR
     with (outdir / "targeted-cal26.jsonl").open(encoding="utf-8") as fh:
@@ -610,7 +925,27 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Phase 6-E.5: recompute matrix/gate from saved candidate-eval artifacts",
     )
+    parser.add_argument(
+        "--regression-attribution",
+        action="store_true",
+        help="Phase 6-E.6: paired replay for TASK-JUDGE-01/CAL-08/CAL-18",
+    )
+    parser.add_argument(
+        "--summarize-attribution",
+        action="store_true",
+        help="Phase 6-E.6: recompute attribution from saved regression-attribution runs",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=ATTRIBUTION_REPEATS_DEFAULT,
+        help="paired rounds per case (E.6 attribution)",
+    )
     args = parser.parse_args(argv)
+    if args.summarize_attribution:
+        return _summarize_attribution(repeats=args.repeats)
+    if args.regression_attribution:
+        return _regression_attribution(repeats=args.repeats)
     if args.summarize:
         return _summarize()
     if args.candidate_eval:

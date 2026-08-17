@@ -1,0 +1,223 @@
+{
+  "candidate_id": "prompt-b-v2-candidate-1",
+  "scope": {
+    "case_ids": [
+      "TASK-JUDGE-01",
+      "CAL-08",
+      "CAL-18"
+    ],
+    "repeats_per_arm": 5,
+    "arm_order": "alternating B/B-prime per round",
+    "replacement_policy": "failed attempts retried same-arm up to 2 times; un-replaced failure => matrix incomplete"
+  },
+  "fixed_conditions": {
+    "dataset_id": "calibration:phase6d:procurement",
+    "dataset_version": "2",
+    "provider": "model_studio",
+    "model": "qwen3.7-plus",
+    "baseline_prompt_id": "prompt:phase6b:judge:B:v1",
+    "candidate_prompt_id": "prompt:phase6b:judge:B-prime:v1",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 8192,
+    "timeout": 120.0,
+    "response_format": {
+      "type": "json_object"
+    },
+    "git_commit": "65f79dfc66c888953e836c1ecf8fe8ae71f1b3a7"
+  },
+  "attribution_policy": {
+    "order": [
+      "INSUFFICIENT_EVIDENCE: fresh paired matrix incomplete",
+      "BASELINE_INSTABILITY: any baseline verdict != PASS over full evidence set",
+      "CANDIDATE_REGRESSION: baseline all PASS and candidate all INCONCLUSIVE (100% stable)",
+      "PROVIDER_NONDETERMINISM: candidate arm swings PASS/INCONCLUSIVE or anomaly not reproduced"
+    ],
+    "evidence_set": "E.5 Run1 + Run2 + E.6 fresh paired attempts (identical controls)"
+  },
+  "per_case": {
+    "TASK-JUDGE-01": {
+      "expected_status": "PASS",
+      "fresh": {
+        "baseline": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "INCONCLUSIVE"
+        ],
+        "candidate": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ]
+      },
+      "historical": {
+        "baseline": [
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "PASS"
+        ]
+      },
+      "combined": {
+        "baseline": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "INCONCLUSIVE",
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "INCONCLUSIVE",
+          "PASS"
+        ]
+      },
+      "failures": [
+        {
+          "run_id": 5,
+          "arm": "candidate",
+          "attempt_seq": 1,
+          "failure_kind": "TIMEOUT",
+          "artifact": "artifacts/regression-attribution/TASK-JUDGE-01-model_studio-B-prime-attribution-r5.json"
+        }
+      ],
+      "matrix_complete": true,
+      "attribution": "BASELINE_INSTABILITY",
+      "reason": "baseline not stable PASS: ['INCONCLUSIVE', 'PASS']"
+    },
+    "CAL-08": {
+      "expected_status": "PASS",
+      "fresh": {
+        "baseline": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE"
+        ]
+      },
+      "historical": {
+        "baseline": [
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "PASS"
+        ]
+      },
+      "combined": {
+        "baseline": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "PASS"
+        ]
+      },
+      "failures": [
+        {
+          "run_id": 5,
+          "arm": "candidate",
+          "attempt_seq": 1,
+          "failure_kind": "UNAVAILABLE",
+          "artifact": "artifacts/regression-attribution/CAL-08-model_studio-B-prime-attribution-r5.json"
+        }
+      ],
+      "matrix_complete": true,
+      "attribution": "PROVIDER_NONDETERMINISM",
+      "reason": "candidate arm swings PASS/INCONCLUSIVE: ['INCONCLUSIVE', 'PASS']"
+    },
+    "CAL-18": {
+      "expected_status": "PASS",
+      "fresh": {
+        "baseline": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE"
+        ]
+      },
+      "historical": {
+        "baseline": [
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "PASS"
+        ]
+      },
+      "combined": {
+        "baseline": [
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS",
+          "PASS"
+        ],
+        "candidate": [
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "INCONCLUSIVE",
+          "PASS"
+        ]
+      },
+      "failures": [],
+      "matrix_complete": true,
+      "attribution": "PROVIDER_NONDETERMINISM",
+      "reason": "candidate arm swings PASS/INCONCLUSIVE: ['INCONCLUSIVE', 'PASS']"
+    }
+  },
+  "gate": {
+    "decision": "REGRESSION_SAFETY_CONFIRMED",
+    "per_case": {
+      "TASK-JUDGE-01": "BASELINE_INSTABILITY",
+      "CAL-08": "PROVIDER_NONDETERMINISM",
+      "CAL-18": "PROVIDER_NONDETERMINISM"
+    }
+  }
+}

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from pilot.adoption_authority import (
     AUTHORITY_FIELDS,
+    HARDENED_MODE,
     PROVENANCE_KEYS,
     REVOCABLE_STATUSES,
     authority_id_for,
@@ -29,6 +30,8 @@ from pilot.adoption_authority import (
     load_authority_events,
     load_authority_record,
     load_store,
+    revocation_violations,
+    store_integrity_mode,
 )
 from pilot.registry import BINDING_KEYS, AdoptionBlocked
 
@@ -232,14 +235,15 @@ def violations_for_runtime_activation(
         block("INVALID_LIFECYCLE", f"candidate={authority.get('candidate_id')} "
                                    "missing=PROMOTABLE->PROMOTED")
 
-    revoked = authority.get("status") in ("REVOKED", "SUPERSEDED") or any(
-        r.get("candidate_id") == authority.get("candidate_id")
-        and r.get("candidate_version") == authority.get("candidate_version")
-        and r.get("decision_id") == decision.get("decision_id")
-        for r in (store.get("revocations", []) or [])
-    )
-    if revoked:
+    if authority.get("status") in ("REVOKED", "SUPERSEDED"):
         block("REVOKED_DECISION", f"decision={decision.get('decision_id')}")
+    for v in revocation_violations(
+        store,
+        authority.get("candidate_id"),
+        authority.get("candidate_version"),
+        decision.get("decision_id"),
+    ):
+        block(v["code"], v["message"])
 
     if authority.get("issued_at") is not None and authority.get("issued_at") != decision.get(
         "created_at"
@@ -315,14 +319,17 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
         raise AdoptionBlocked(
             [{"code": "AUTHORITY_BINDING_MISMATCH",
               "message": "immutable authority record unreadable"}])
-    # Same explicit hardened-store marker as registry.promote(): the
-    # authorities/ directory is the ledger-mode signal. In hardened mode the
-    # ledger record is the authority anchor and a missing record must never
-    # fall back to the derived flat-store copy.
-    if (registry_root / "authorities").is_dir() and file_authority is None:
-        raise AdoptionBlocked(
-            [{"code": "UNISSUED_AUTHORITY",
-              "message": f"no immutable ledger record for authority {aid}"}])
+    # Explicit store_metadata marker (not directory existence): hardened mode
+    # never downgrades to legacy when the ledger directory is deleted.
+    if store_integrity_mode(store) == HARDENED_MODE:
+        if not (registry_root / "authorities").is_dir():
+            raise AdoptionBlocked(
+                [{"code": "INTEGRITY_STORE_CORRUPTED",
+                  "message": "hardened store missing authorities/ ledger directory"}])
+        if file_authority is None:
+            raise AdoptionBlocked(
+                [{"code": "UNISSUED_AUTHORITY",
+                  "message": f"no immutable ledger record for authority {aid}"}])
     if file_authority is not None and store_authority is not None \
             and file_authority != store_authority:
         raise AdoptionBlocked(

@@ -24,6 +24,7 @@ from pilot.adoption_authority import (
     dir_digest,
     issuer_allowed,
     load_store,
+    mark_store_hardened,
     validate,
     write_authority_record,
 )
@@ -274,6 +275,7 @@ def issue_authority(
     if existing_authority is None:
         store["authorities"].append(authority)
 
+    mark_store_hardened(store)
     path = registry_root / "adoption_store.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")

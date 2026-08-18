@@ -51,7 +51,8 @@ revocation durability    VALID：append-only 事件日志；事件与 record 分
 ```
 
 不是 `INTEGRITY_HARDENING_VALID`：issuer 无密码学信任锚；legacy store（没有
-`authorities/` 目录）仍保留 8.3 之前的语义；OS 级 TOCTOU 未闭合。
+显式 `store_metadata.integrity_mode = "hardened"` marker）仍保留 8.3 之前的
+语义（PRODUCTION_HARDENING_NOT_ESTABLISHED）；OS 级 TOCTOU 未闭合。
 不是 `PARTIAL`：四个关键路径（producer / registry / runtime / revoke）都有
 真实代码 enforcement，不是只有设计。
 
@@ -308,6 +309,10 @@ load-bearing 的 revocation 副本：
   - revoke_authority() 写事件时同步写入 store copy；
   - 事件与副本统一使用 canonical 字段 decision_id
     （promotion_decision_id 只保留为同值 legacy mirror）；
+  - 读侧（validation）先 normalize_revocation_record()：decision_id 缺失时
+    用 promotion_decision_id 作为 canonical；两者都存在但不同 ->
+    REVOCATION_RECORD_CONFLICT；两者都缺失 -> INVALID_REVOCATION_RECORD
+    （全部 fail-closed，不使用 OR 模糊匹配）；
   - events 文件缺失 -> 副本仍阻断（不会自动恢复 ALLOW）；
   - events 与副本任一显示 REVOKED/SUPERSEDED，或 events 文件损坏
     -> FAIL CLOSED（REVOKED_DECISION / AUTHORITY_BINDING_MISMATCH）。
@@ -402,11 +407,12 @@ pilot/harness.py
 ### 兼容性
 
 ```text
-旧 store 没有 authorities/ 目录 -> 走 legacy 路径（8.3 语义保留，UNKNOWN）。
-新 producer 签发的 store 必有 ledger -> Registry / Runtime 强制校验；
-ledger 记录缺失时 Runtime 与 Registry 同样 fail-closed，不再依赖
-store["authorities"] 派生副本。
-Phase 7–8.3 历史 artifacts 未修改；94 个历史测试全部保持通过。
+旧 store 没有 store_metadata.integrity_mode = "hardened" marker -> 走 legacy
+路径（8.3 语义保留，分类为 PRODUCTION_HARDENING_NOT_ESTABLISHED）。
+新 producer 签发的 store 必有 marker + ledger -> Registry / Runtime 强制校验；
+ledger 记录缺失 -> UNISSUED_AUTHORITY；authorities/ 目录整体缺失 ->
+INTEGRITY_STORE_CORRUPTED（绝不 fallback 到 store["authorities"]，
+绝不降级为 legacy）。Phase 7–8.3 历史 artifacts 未修改。
 ```
 
 ---
@@ -454,9 +460,10 @@ FACT      revoke / supersede 只 append events JSONL（O_APPEND + fsync），
          不重写 authority record；事件与 store copy 统一 canonical
          decision_id；events 缺失时 store copy 仍 load-bearing 阻断，
          events 与副本任一显示撤销或事件文件损坏 -> FAIL CLOSED。
-UNKNOWN   events / store / ledger 文件本身可被 OS 级删除；
-         删除整个 authorities/ 目录会把 store 从 hardened 模式
-         降级为 legacy 模式（OS 级删除抵抗未实现）。
+UNKNOWN   events / store / ledger 文件本身仍可被 OS 级删除（WORM / 只读
+         挂载未实现）；但删除整个 authorities/ 目录不再降级 hardened
+         模式 —— marker 仍在，Registry / Runtime 返回
+         INTEGRITY_STORE_CORRUPTED -> ADOPTION_BLOCKED。
 ```
 
 ---
@@ -468,9 +475,11 @@ UNKNOWN   events / store / ledger 文件本身可被 OS 级删除；
    artifact 文件；需要 WORM / 只读挂载 / open-by-handle。
 2. issuer 无密码学签名：allowlist 只挡“未授权身份”，不挡
    “拿到受信任身份的人”或“配置泄露”。
-3. legacy store 兼容路径：没有 authorities/ 目录的旧 store 仍是 8.3 语义
+3. legacy store 兼容路径：没有显式 hardened marker 的旧 store 仍是 8.3 语义
    （UNISSUED_AUTHORITY / store-revocation 强校验只在 hardened store 上
-   生效）；删除 authorities/ 目录本身即触发该降级（OS 级，UNKNOWN）。
+   生效）；hardened store 删除 authorities/ 目录不会降级 —— 显式 marker
+   使其保持 hardened 并 INTEGRITY_STORE_CORRUPTED 阻断（OS 级物理删除仍
+   UNKNOWN）。
 4. flat adoption_store.json 仍是 last-writer-wins：decision / run /
    policy / lifecycle 的并发写可能丢，但丢失会 fail-closed，
    不会静默放行（ledger 与 store 不一致 -> blocked）。
@@ -540,7 +549,8 @@ INTEGRITY_HARDENING_VALID_WITH_UNKNOWN
   overwrite / binding mutation / delete-recreate / ID collision
   全部 fail-closed；hardened store 下 Registry 与 Runtime 都以 ledger
   record 为 authority anchor，ledger 缺失 -> UNISSUED_AUTHORITY，
-  Runtime 不再 fallback 到 store；OS 级删除 ledger 文件本身仍 UNKNOWN。
+  authorities/ 目录整体缺失 -> INTEGRITY_STORE_CORRUPTED，Runtime 不再
+  fallback 到 store；OS 级删除 ledger 文件本身仍 UNKNOWN。
 
 “谁能签发？Registry / Runtime 为什么信它？”
   签发 = producer.issue_authority() + 受信任 issuer_id

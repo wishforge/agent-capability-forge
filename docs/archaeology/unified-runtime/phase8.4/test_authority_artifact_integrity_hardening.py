@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import shutil
 import sys
 from pathlib import Path
 
@@ -24,12 +25,15 @@ sys.path.insert(0, str(ROOT))
 import pytest  # noqa: E402
 
 from pilot.adoption_authority import (  # noqa: E402
+    LEGACY_MODE,
     authority_events_path,
     authority_id_for,
     authority_record_path,
     load_authority_record,
     load_store,
+    normalize_revocation_record,
     revoke_authority,
+    store_integrity_mode,
     write_authority_record,
 )
 from pilot.adoption_authority_producer import issue_authority  # noqa: E402
@@ -398,6 +402,173 @@ def test_different_authority_same_candidate_version_blocked(
 
 def _rewrite_store(root, store: dict) -> None:
     (root / "adoption_store.json").write_text(json.dumps(store, indent=2) + "\n")
+
+
+def _legacy_shape_revoked_store(root, authority) -> None:
+    """revoke, then strip canonical decision_id from the store copy and drop events."""
+    aid = authority["authority_id"]
+    assert revoke_authority(root, aid, status="REVOKED", issuer_id="test",
+                            reason="test")["verdict"] == "REVOKED"
+    store = load_store(root)
+    copy = next(r for r in store["revocations"] if r["authority_id"] == aid)
+    copy.pop("decision_id", None)
+    _rewrite_store(root, store)
+    authority_events_path(root, aid).unlink()
+
+
+# --- 8.4.2 closure: explicit hardened-mode marker -------------------------
+
+def test_hardened_store_marker_written_and_preserved(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    store = load_store(env["root"])
+    assert store_integrity_mode(store) == "hardened"
+    assert store["store_metadata"]["schema_version"] == "adoption_store_v2"
+    # marker survives revoke_authority's whole-store rewrite
+    revoke_authority(env["root"], env["authority"]["authority_id"],
+                     status="REVOKED", issuer_id="test")
+    assert store_integrity_mode(load_store(env["root"])) == "hardened"
+
+
+def test_delete_entire_authorities_dir_blocks_registry(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    shutil.rmtree(env["root"] / "authorities")
+    assert load_store(env["root"])["authorities"]  # store copy still present
+    with pytest.raises(AdoptionBlocked) as ei:
+        promote(FAMILY, NAME, candidate, evaluation, env["root"],
+                adoption_authority=env["authority"])
+    assert "INTEGRITY_STORE_CORRUPTED" in blocked_codes(ei.value)
+
+
+def test_delete_entire_authorities_dir_blocks_runtime_and_mount(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    shutil.rmtree(env["root"] / "authorities")
+    assert load_store(env["root"])["authorities"]  # no fallback happens
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.adopt(env["root"], env["entry"], env["artifact_dir"])
+    assert "INTEGRITY_STORE_CORRUPTED" in blocked_codes(ei.value)
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.verify_at_mount(env["root"], env["entry"], env["artifact_dir"])
+    assert "INTEGRITY_STORE_CORRUPTED" in blocked_codes(ei.value)
+
+
+def test_legacy_store_without_marker_keeps_legacy_semantics(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    root = tmp_path / "registry"
+    root.mkdir()
+    issued = issue_authority(root, candidate, evaluation, confirm=confirm)
+    store = load_store(root)
+    store.pop("store_metadata", None)
+    _rewrite_store(root, store)
+    shutil.rmtree(root / "authorities")
+    assert store_integrity_mode(load_store(root)) == LEGACY_MODE
+    entry = promote(FAMILY, NAME, candidate, evaluation, root,
+                    adoption_authority=issued["authority"])
+    assert entry["state"] == "promoted"
+    guard.mark_promoted(root, entry)
+    assert guard.adopt(root, entry,
+                       Path(entry["artifact_dir"]))["verdict"] == "ALLOW"
+
+
+# --- 8.4.2 closure: revocation read-side normalization --------------------
+
+def test_legacy_revocation_copy_only_promotion_decision_id_blocks_runtime(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    _legacy_shape_revoked_store(env["root"], env["authority"])
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.adopt(env["root"], env["entry"], env["artifact_dir"])
+    assert "REVOKED_DECISION" in blocked_codes(ei.value)
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.verify_at_mount(env["root"], env["entry"], env["artifact_dir"])
+    assert "REVOKED_DECISION" in blocked_codes(ei.value)
+
+
+def test_legacy_revocation_copy_only_promotion_decision_id_blocks_registry(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    root = tmp_path / "registry"
+    root.mkdir()
+    issued = issue_authority(root, candidate, evaluation, confirm=confirm)
+    _legacy_shape_revoked_store(root, issued["authority"])
+    with pytest.raises(AdoptionBlocked) as ei:
+        promote(FAMILY, NAME, candidate, evaluation, root,
+                adoption_authority=issued["authority"])
+    assert "REVOKED_DECISION" in blocked_codes(ei.value)
+
+
+def test_revocation_both_ids_equal_normalizes(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    store = load_store(env["root"])
+    record = {
+        "revocation_id": "rev-both-equal",
+        "candidate_id": CAND_ID,
+        "candidate_version": env["authority"]["candidate_version"],
+        "decision_id": env["authority"]["decision_id"],
+        "promotion_decision_id": env["authority"]["promotion_decision_id"],
+        "status": "REVOKED",
+    }
+    store["revocations"].append(record)
+    _rewrite_store(env["root"], store)
+    canonical, err = normalize_revocation_record(record)
+    assert canonical == env["authority"]["decision_id"]
+    assert err is None
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.adopt(env["root"], env["entry"], env["artifact_dir"])
+    assert "REVOKED_DECISION" in blocked_codes(ei.value)
+
+
+def test_revocation_conflicting_ids_fail_closed(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    store = load_store(env["root"])
+    store["revocations"].append({
+        "revocation_id": "rev-conflict",
+        "candidate_id": CAND_ID,
+        "candidate_version": env["authority"]["candidate_version"],
+        "decision_id": "dec-A",
+        "promotion_decision_id": "dec-B",
+        "status": "REVOKED",
+    })
+    _rewrite_store(env["root"], store)
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.adopt(env["root"], env["entry"], env["artifact_dir"])
+    assert "REVOCATION_RECORD_CONFLICT" in blocked_codes(ei.value)
+    with pytest.raises(AdoptionBlocked) as ei:
+        promote(FAMILY, NAME, candidate, evaluation, env["root"],
+                adoption_authority=env["authority"])
+    assert "REVOCATION_RECORD_CONFLICT" in blocked_codes(ei.value)
+
+
+def test_revocation_missing_ids_fail_closed(
+    tmp_path, candidate, evaluation, confirm
+) -> None:
+    env = issue_and_promote(tmp_path, candidate, evaluation, confirm)
+    store = load_store(env["root"])
+    store["revocations"].append({
+        "revocation_id": "rev-no-ids",
+        "candidate_id": CAND_ID,
+        "candidate_version": env["authority"]["candidate_version"],
+        "status": "REVOKED",
+    })
+    _rewrite_store(env["root"], store)
+    with pytest.raises(AdoptionBlocked) as ei:
+        guard.adopt(env["root"], env["entry"], env["artifact_dir"])
+    assert "INVALID_REVOCATION_RECORD" in blocked_codes(ei.value)
+    with pytest.raises(AdoptionBlocked) as ei:
+        promote(FAMILY, NAME, candidate, evaluation, env["root"],
+                adoption_authority=env["authority"])
+    assert "INVALID_REVOCATION_RECORD" in blocked_codes(ei.value)
 
 
 def test_invariant_g8_missing_ledger_blocks_runtime(

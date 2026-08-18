@@ -32,6 +32,10 @@ NON_PROMOTE_VALUES = {"HOLD", "REJECTED", "REJECT", "CANARY", "PENDING"}
 REVOCABLE_STATUSES = ("REVOKED", "SUPERSEDED")
 STORE_FILENAME = "adoption_store.json"
 AUTHORITY_DIR_NAME = "authorities"
+STORE_METADATA_KEY = "store_metadata"
+HARDENED_MODE = "hardened"
+LEGACY_MODE = "legacy"
+HARDENED_SCHEMA_VERSION = "adoption_store_v2"
 DEFAULT_ISSUER_ID = "pilot-rehearsal"
 TRUSTED_ISSUERS_ENV = "PILOT_TRUSTED_ISSUERS"
 
@@ -59,6 +63,19 @@ def dir_digest(directory: Path) -> str:
 def load_store(registry_root: Path) -> dict | None:
     path = Path(registry_root) / STORE_FILENAME
     return json.loads(path.read_text()) if path.exists() else None
+
+
+def store_integrity_mode(store: dict) -> str:
+    """Explicit hardened marker; authorities/ directory existence is NOT the marker."""
+    metadata = store.get(STORE_METADATA_KEY) or {}
+    return HARDENED_MODE if metadata.get("integrity_mode") == HARDENED_MODE else LEGACY_MODE
+
+
+def mark_store_hardened(store: dict) -> None:
+    """Persisted once when a store is initialized/upgraded with the authority ledger."""
+    store.setdefault(STORE_METADATA_KEY, {})
+    store[STORE_METADATA_KEY]["schema_version"] = HARDENED_SCHEMA_VERSION
+    store[STORE_METADATA_KEY]["integrity_mode"] = HARDENED_MODE
 
 
 def trusted_issuers() -> frozenset[str]:
@@ -241,6 +258,39 @@ def _lifecycle(store: dict, candidate_id: str | None) -> dict | None:
     return (store.get("lifecycle", {}) or {}).get(candidate_id)
 
 
+def normalize_revocation_record(record) -> tuple[str | None, str | None]:
+    """Read-side normalization: canonical decision_id, or a fail-closed error code."""
+    if not isinstance(record, dict):
+        return None, "INVALID_REVOCATION_RECORD"
+    decision_id = record.get("decision_id")
+    promotion_id = record.get("promotion_decision_id")
+    if decision_id is not None and promotion_id is not None and decision_id != promotion_id:
+        return None, "REVOCATION_RECORD_CONFLICT"
+    if decision_id is None and promotion_id is None:
+        return None, "INVALID_REVOCATION_RECORD"
+    return (decision_id if decision_id is not None else promotion_id), None
+
+
+def revocation_violations(store: dict, cand_id: str | None, cand_ver: str | None,
+                          decision_id: str | None) -> list[dict]:
+    """Normalize every store revocation record; malformed/conflicting records block."""
+    violations: list[dict] = []
+    for record in store.get("revocations", []) or []:
+        canonical, err = normalize_revocation_record(record)
+        if err is not None:
+            rid = record.get("revocation_id") if isinstance(record, dict) else None
+            violations.append({"code": err, "message": f"revocation={rid}"})
+            continue
+        if (
+            record.get("candidate_id") == cand_id
+            and record.get("candidate_version") == cand_ver
+            and canonical == decision_id
+        ):
+            violations.append({"code": "REVOKED_DECISION",
+                               "message": f"decision={decision_id}"})
+    return violations
+
+
 def _missing_provenance(prov, run_id: str | None) -> list[str]:
     if not isinstance(prov, dict):
         return ["provenance"]
@@ -282,6 +332,10 @@ def violations_for_authority(
         )
     if not issuer_allowed(authority.get("issuer_id")):
         block("UNTRUSTED_ISSUER", f"issuer={authority.get('issuer_id')}")
+    if registry_root is not None and store_integrity_mode(store) == HARDENED_MODE \
+            and not (Path(registry_root) / AUTHORITY_DIR_NAME).is_dir():
+        block("INTEGRITY_STORE_CORRUPTED",
+              "hardened store missing authorities/ ledger directory")
     if registry_root is not None and authority.get("authority_id"):
         try:
             record = load_authority_record(
@@ -403,15 +457,9 @@ def violations_for_authority(
     ):
         block("INVALID_LIFECYCLE", f"candidate={cand_id} missing=PROMOTABLE->PROMOTED")
 
-    if "revocations" in store:
-        revoked = any(
-            r.get("candidate_id") == cand_id
-            and r.get("candidate_version") == cand_ver
-            and r.get("decision_id") == decision.get("decision_id")
-            for r in (store.get("revocations", []) or [])
-        )
-        if revoked:
-            block("REVOKED_DECISION", f"decision={decision.get('decision_id')}")
+    for v in revocation_violations(store, cand_id, cand_ver,
+                                   decision.get("decision_id")):
+        block(v["code"], v["message"])
 
     if authority.get("issued_at") is not None and authority.get("issued_at") != decision.get(
         "created_at"

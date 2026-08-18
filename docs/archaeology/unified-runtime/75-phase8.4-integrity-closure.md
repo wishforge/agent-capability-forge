@@ -5,6 +5,13 @@
 > 约束遵守：历史 Phase 7–8.3 artifacts 未修改；未启动 8.5；未接第二
 > Runtime / Langfuse；未做 E.8 / production-wide rollout；未 commit / push。
 
+> 8.4.2 修订（见 76）：本文件此前用 `authorities/` 目录存在性作为 hardened
+> mode 信号，这是不可靠 marker（整个目录被删除会降级 legacy）。8.4.2 起
+> hardened mode 由 `store_metadata.integrity_mode = "hardened"` 显式标记，
+> 目录删除 -> INTEGRITY_STORE_CORRUPTED -> ADOPTION_BLOCKED；revocation
+> 增加 read-side normalization（decision_id 缺失时归一化
+> promotion_decision_id，冲突 / 双缺失 fail-closed）。
+
 ## 0. 结论
 
 ```text
@@ -21,7 +28,8 @@ FACT   load-bearing store revocation copy（修复后：events 缺失仍 BLOCK�
 FACT   verify_at_mount()（继承 adopt() 同一 ledger 规则）
 
 UNKNOWN（本次修复不改变）
-  OS-level deletion resistance（删除整个 authorities/ 目录会降级 legacy 模式）
+  OS-level deletion resistance（文件 / 目录仍可被物理删除，但删除
+  authorities/ 不再降级 legacy —— 8.4.2 显式 marker 阻断；WORM 未实现）
   cryptographic issuer trust（无签名 / PKI）
   full WORM
   distributed TOCTOU elimination（recheck 与 bind-mount 解析之间微窗口）
@@ -77,11 +85,13 @@ if (registry_root / "authorities").is_dir() and file_authority is None:
           "message": f"no immutable ledger record for authority {aid}"}])
 ```
 
-- hardened store 判定与 `registry.promote()` 使用同一个显式信号：
-  `(registry_root / "authorities").is_dir()`；不是“文件不存在”推断。
+- 8.4.1 使用 `(registry_root / "authorities").is_dir()` 作为 hardened 信号；
+  8.4.2 修订为同一个显式 marker：`store_metadata.integrity_mode ==
+  "hardened"`（目录存在性不再参与判定）。
 - hardened 模式：ledger record 是唯一 authority anchor，缺失 -> BLOCK，
-  禁止 fallback 到 `store["authorities"]`。
-- legacy 模式（无 `authorities/` 目录）：保留 Phase 8.2 历史语义
+  禁止 fallback 到 `store["authorities"]`；authorities/ 目录整体缺失 ->
+  INTEGRITY_STORE_CORRUPTED -> BLOCK（不降级）。
+- legacy 模式（无 marker）：保留 Phase 8.2 历史语义
   （store 派生副本兜底）。
 - `verify_at_mount()` 直接调用 `adopt()`，自动继承同一规则。
 
@@ -98,8 +108,11 @@ if (registry_root / "authorities").is_dir() and file_authority is None:
   authorities / Phase 8.2 fixtures 一致）。
 - `promotion_decision_id` 仅保留为同值 legacy mirror，二者不再有语义分歧。
 - 写 store copy 前增加显式 normalization 层：旧副本只有
-  `promotion_decision_id` 时补写 `decision_id`；校验路径不引入
-  `OR promotion_decision_id / decision_id` 模糊匹配。
+  `promotion_decision_id` 时补写 `decision_id`；8.4.2 再增加 read-side
+  normalization（normalize_revocation_record()）：校验路径先归一化为
+  canonical decision_id，再只按 canonical 匹配，不引入
+  `OR promotion_decision_id / decision_id` 模糊匹配；两个 ID 都存在但不同
+  -> REVOCATION_RECORD_CONFLICT；两者都缺失 -> INVALID_REVOCATION_RECORD。
 
 ## 4. Before / After
 
@@ -109,7 +122,7 @@ if (registry_root / "authorities").is_dir() and file_authority is None:
 | --- | --- | --- |
 | hardened store，删除 `authorities/<id>.json` | Runtime ALLOW（store 副本兜底） | `UNISSUED_AUTHORITY` -> ADOPTION_BLOCKED |
 | hardened store，删除 ledger + 改写 store authority | ALLOW（store 副本自洽） | `UNISSUED_AUTHORITY` -> ADOPTION_BLOCKED |
-| legacy store（无 `authorities/`） | store 副本兜底 | 不变（历史兼容） |
+| legacy store（无 hardened marker） | store 副本兜底 | 不变（历史兼容，PRODUCTION_HARDENING_NOT_ESTABLISHED） |
 
 ### P2
 
@@ -125,11 +138,14 @@ if (registry_root / "authorities").is_dir() and file_authority is None:
 ```text
 G8   Hardened store + missing ledger -> ADOPTION_BLOCKED
      （Registry UNISSUED_AUTHORITY 已有；Runtime adopt() /
-     verify_at_mount() 本次补上）
+     verify_at_mount() 本次补上；8.4.2：hardened marker + authorities/
+     目录整体缺失 -> INTEGRITY_STORE_CORRUPTED，不降级 legacy）
 G9   Hardened store + revoked store record -> ADOPTION_BLOCKED
      （events 文件缺失时 store copy 仍 load-bearing）
 G10  Revocation event / store copy schema 共享 canonical decision_id
-     （校验只匹配 decision_id；promotion_decision_id 仅为同值 legacy mirror）
+     （8.4.2：read-side normalize_revocation_record() 后只匹配 canonical
+     decision_id；promotion_decision_id 仅为同值 legacy mirror；
+     历史副本仅含 promotion_decision_id 也可识别 revoked）
 ```
 
 三个 invariant 均有 machine-checkable 测试（见 §6）。
@@ -161,6 +177,12 @@ G10 test_invariant_g10_revocation_schema_uses_canonical_decision_id
 其它 test_mutated_revocation_artifacts_still_block（3 参数）
     event status 改 ISSUED / store copy decision_id 改写 /
     events 文件损坏 -> 全部 FAIL CLOSED
+8.4.2 新增（见 76）：
+    删除整个 authorities/ 目录 -> Registry / Runtime / mount 全部
+    INTEGRITY_STORE_CORRUPTED
+    仅含 promotion_decision_id 的 legacy revocation copy -> REVOKED_DECISION
+    decision_id + promotion_decision_id 冲突 -> REVOCATION_RECORD_CONFLICT
+    双缺失 -> INVALID_REVOCATION_RECORD
 ```
 
 ## 7. Adversarial Verification
@@ -199,8 +221,9 @@ compileall
 ```text
 OS-level deletion resistance
   - 删除 authorities/<id>.json 被应用层阻断；
-  - 删除整个 authorities/ 目录会把 hardened 模式降级为 legacy
-    （未实现 WORM / 只读挂载 / 目录级防删除）。
+  - 删除整个 authorities/ 目录不再降级：显式 marker 保持 hardened 并
+    INTEGRITY_STORE_CORRUPTED 阻断；物理删除仍可能，WORM / 只读挂载 /
+    目录级防删除未实现。
 cryptographic issuer trust
   - 仍为 deterministic binding + 可选 allowlist，无签名 / PKI / KMS。
 full WORM

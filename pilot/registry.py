@@ -13,10 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pilot.adoption_authority import (
+    HARDENED_MODE,
     authority_id_for,
     dir_digest,
     load_authority_record,
     load_store,
+    store_integrity_mode,
     validate,
 )
 
@@ -77,7 +79,16 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
     report = validate(adoption_authority, store, actual_digest, registry_root)
     if not report["allowed"]:
         raise AdoptionBlocked(report["violations"])
-    if (registry_root / "authorities").is_dir():
+    if store_integrity_mode(store) == HARDENED_MODE:
+        if not (registry_root / "authorities").is_dir():
+            raise AdoptionBlocked(
+                [
+                    {
+                        "code": "INTEGRITY_STORE_CORRUPTED",
+                        "message": "hardened store missing authorities/ ledger directory",
+                    }
+                ]
+            )
         aid = authority_id_for(
             adoption_authority.get("candidate_id"),
             adoption_authority.get("candidate_version"),

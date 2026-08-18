@@ -49,6 +49,14 @@ from forge.capabilityizer import (  # noqa: E402
     frozen_checks,
 )
 
+IDENTITY_FIELDS = ("candidate_id", "candidate_version", "artifact_digest", "seal_digest")
+IDENTITY_MISMATCH_CODES = {
+    "candidate_id": "CANDIDATE_ID_MISMATCH",
+    "candidate_version": "CANDIDATE_VERSION_MISMATCH",
+    "artifact_digest": "ARTIFACT_DIGEST_MISMATCH",
+    "seal_digest": "SEAL_DIGEST_MISMATCH",
+}
+
 
 def _decision(store: dict, decision_id: str | None) -> dict | None:
     return next(
@@ -294,6 +302,27 @@ def violations_for_runtime_activation(
     return violations
 
 
+def identity_violations(expected: dict, actual: dict) -> list[dict]:
+    """Unified four-field identity comparison. No partial match: a missing
+    expected/actual component or any mismatch is a violation."""
+    violations: list[dict] = []
+    for field in IDENTITY_FIELDS:
+        exp = expected.get(field)
+        act = actual.get(field)
+        if exp in (None, ""):
+            violations.append({"code": "MISSING_IDENTITY",
+                               "message": f"expected.{field} missing"})
+        elif act in (None, ""):
+            violations.append({"code": "MISSING_IDENTITY",
+                               "message": f"actual.{field} missing"})
+        elif exp != act:
+            violations.append({
+                "code": IDENTITY_MISMATCH_CODES[field],
+                "message": f"{field}={exp!r} actual={act!r}",
+            })
+    return violations
+
+
 def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict:
     """Validate before the pilot B3 runtime activates/executes an artifact.
 
@@ -408,24 +437,39 @@ def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict
         "verdict": "ALLOW",
         "allowed": True,
         "authority_id": authority.get("authority_id"),
+        "candidate_id": authority.get("candidate_id"),
+        "candidate_version": authority.get("candidate_version"),
         "artifact_digest": actual_digest,
+        "seal_digest": authority.get("seal_digest"),
+        "verified_artifact_dir": str(Path(artifact_dir).resolve()),
     }
 
 
 def verify_at_mount(registry_root, entry: dict, artifact_dir,
                     expected_digest: str | None = None,
-                    *, frozen_root=None) -> dict:
+                    *, frozen_root=None, expected_identity: dict | None = None,
+                    mount_source=None) -> dict:
     """Fresh adopt() recheck immediately before docker_launch mounts.
 
-    Closes the pre-mount replacement window in the pilot B3 path: the bytes
-    that pass here are the bytes the next statement mounts (modulo the
-    OS-level bind-mount race, which remains UNKNOWN).
+    R8 contract: the only legal mount source is the artifact_dir verified
+    here (report["verified_artifact_dir"]). Callers must pass the exact
+    path they will mount and must not re-resolve/replace it between this
+    call and the bind mount. verify -> kernel bind-mount OS race = UNKNOWN.
     """
     report = adopt(registry_root, entry, artifact_dir, frozen_root=frozen_root)
+    if expected_identity is not None:
+        violations = identity_violations(expected_identity, report)
+        if violations:
+            raise AdoptionBlocked(violations)
     if expected_digest is not None and report["artifact_digest"] != expected_digest:
         raise AdoptionBlocked(
             [{"code": "ARTIFACT_DIGEST_MISMATCH",
               "message": "artifact changed between activation check and mount"}])
+    if mount_source is not None and \
+            str(Path(mount_source).resolve()) != report["verified_artifact_dir"]:
+        raise AdoptionBlocked(
+            [{"code": "RUNTIME_BINDING_MISMATCH",
+              "message": "mount_source differs from verified artifact_dir"}])
     return report
 
 
@@ -485,6 +529,7 @@ def mark_promoted(registry_root, entry: dict) -> None:
 __all__ = [
     "AdoptionBlocked",
     "adopt",
+    "identity_violations",
     "mark_promoted",
     "verify_at_mount",
     "violations_for_runtime_activation",

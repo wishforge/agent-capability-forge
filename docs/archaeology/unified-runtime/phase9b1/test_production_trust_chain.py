@@ -393,7 +393,14 @@ def test_phase_future_b3_activates_with_frozen_candidate(tmp_path, monkeypatch) 
         "sandbox_id": "cbx-9b1", "exit_code": 0, "stdout": "ok", "stderr": "",
         "elapsed_s": 0.1, "timed_out": False})
     (h.state / "b3_entry.json").write_text(json.dumps(
-        {"name": NAME, "capability_id": env["entry"]["capability_id"]}))
+        {
+            "name": NAME,
+            "capability_id": env["entry"]["capability_id"],
+            "candidate_id": env["entry"]["adoption"]["candidate_id"],
+            "candidate_version": env["entry"]["adoption"]["candidate_version"],
+            "artifact_digest": env["entry"]["adoption"]["artifact_digest"],
+            "seal_digest": env["authority"]["seal_digest"],
+        }))
     ids = h.phase_future("b3")
     assert len(ids) == 1
     assert len(calls) == 1

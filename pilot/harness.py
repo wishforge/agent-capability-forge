@@ -34,6 +34,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from forge.sandbox import launch as docker_launch  # noqa: E402
 from forge.capabilityizer import (  # noqa: E402
+    CANONICAL_ARTIFACT_IDENTITY_V1,
     bind_evaluation,
     capabilityize,
     CapabilityizeError,
@@ -630,8 +631,17 @@ class Harness:
                 adoption_authority=issued["authority"],
                 frozen_root=self.state / "frozen_candidates")
             runtime_guard.mark_promoted(self.registry_root, entry)
+            # R1: the run request carries the expected four-field identity;
+            # name/capability_id remain locators only.
             (self.state / "b3_entry.json").write_text(
-                json.dumps({"name": name, "capability_id": entry["capability_id"]}, indent=2) + "\n")
+                json.dumps({
+                    "name": name,
+                    "capability_id": entry["capability_id"],
+                    "candidate_id": entry["adoption"]["candidate_id"],
+                    "candidate_version": entry["adoption"]["candidate_version"],
+                    "artifact_digest": entry["adoption"]["artifact_digest"],
+                    "seal_digest": issued["authority"]["seal_digest"],
+                }, indent=2) + "\n")
         else:
             entry = registry.reject("F+", name, cand, evaluation, self.registry_root)
             raise RuntimeError("B3 evaluation FAIL; capability rejected")
@@ -743,10 +753,19 @@ class Harness:
                 out = run_dir / "output"
                 out.mkdir()
                 artifact_digest = adopted["artifact_digest"]
-                # P0 TOCTOU guard: fresh digest + latest revocation recheck
-                # immediately before the bind mount; any change -> blocked.
-                runtime_guard.verify_at_mount(
-                    self.registry_root, entry, artifact_dir, artifact_digest)
+                # R1 + R8: expected identity from the run request must equal
+                # the adopted identity; the verified path is the only mount
+                # source. Fresh digest + revocation recheck before mount.
+                # Legacy Phase 8 candidates keep historical legacy binding
+                # (ALLOW); canonical candidates require the four-field
+                # expected identity and fail closed on old-format requests.
+                mount = runtime_guard.verify_at_mount(
+                    self.registry_root, entry, artifact_dir,
+                    expected_digest=entry_meta.get("artifact_digest"),
+                    expected_identity=entry_meta if entry.get("artifact_identity")
+                    == CANONICAL_ARTIFACT_IDENTITY_V1 else None,
+                    mount_source=artifact_dir)
+                artifact_dir = Path(mount["verified_artifact_dir"])
                 invoke = docker_launch(self.cfg["sandbox"]["image"], [
                     (artifact_dir, "/artifact", True),
                     (self._fixture(tid) / "input", "/input", True),

@@ -33,8 +33,10 @@ class CapabilityizeError(Exception):
 # CANONICAL_ARTIFACT_IDENTITY_V1 + Candidate Seal (Phase 9-B.1)
 # ---------------------------------------------------------------------------
 CANONICAL_ARTIFACT_IDENTITY_V1 = "CANONICAL_ARTIFACT_IDENTITY_V1"
-SEAL_SCHEMA = "frozen-candidate-v1"
-SEAL_VERSION = "v1"
+SEAL_SCHEMA_V1 = "frozen-candidate-v1"
+SEAL_VERSION_V1 = "v1"
+SEAL_SCHEMA = "frozen-candidate-v2"
+SEAL_VERSION = "v2"
 FROZEN_CORE_KEYS = (
     "schema_version", "candidate_id", "capability_id", "name", "version",
     "source", "producer", "requester", "artifact", "manifest", "provenance",
@@ -112,9 +114,12 @@ def tests_digest(tests_dir: Path) -> str:
 
 
 def seal_digest(candidate: dict, artifact_digest_value: str,
-                tests_digest_value: str) -> str:
+                tests_digest_value: str, *,
+                seal_version: str = SEAL_VERSION) -> str:
     """Canonical hash of frozen core + artifact/manifest/tests digests.
 
+    v2+ includes SEAL_SCHEMA / SEAL_VERSION in the payload (DSSE PAE
+    equivalent); v1 keeps the historical payload so existing records verify.
     evaluation/validation/promotion/decision/authority are deliberately
     excluded: they are append-only evidence referencing this digest.
     """
@@ -122,6 +127,9 @@ def seal_digest(candidate: dict, artifact_digest_value: str,
     payload["artifact_digest"] = artifact_digest_value
     payload["manifest_digest"] = manifest_digest(candidate.get("manifest", {}))
     payload["tests_digest"] = tests_digest_value
+    if seal_version != SEAL_VERSION_V1:
+        payload["seal_schema"] = SEAL_SCHEMA
+        payload["seal_version"] = seal_version
     return sha256_bytes(canonical_json(payload))
 
 
@@ -337,7 +345,11 @@ def verify_frozen(store_root, candidate_id: str) -> dict:
     def block(code: str, message: str) -> None:
         violations.append({"code": code, "message": message})
 
-    if record.get("schema") != SEAL_SCHEMA or record.get("seal_version") != SEAL_VERSION:
+    seal_version = record.get("seal_version")
+    if (record.get("schema"), seal_version) not in (
+        (SEAL_SCHEMA, SEAL_VERSION),
+        (SEAL_SCHEMA_V1, SEAL_VERSION_V1),
+    ):
         block("SEAL_SCHEMA_MISMATCH", "frozen record schema/seal_version mismatch")
     for key in ("candidate_id", "capability_id", "name", "version"):
         if record.get(key) != candidate.get(key):
@@ -355,8 +367,9 @@ def verify_frozen(store_root, candidate_id: str) -> dict:
         block("TESTS_DIR_MISSING", "frozen tests directory missing")
     elif tests_digest(snap_dir / "tests") != record.get("tests_digest"):
         block("TESTS_CHANGED_AFTER_SEAL", "tests changed after seal")
-    if seal_digest(candidate, art["digest"], tests_digest(snap_dir / "tests")) \
-            != record.get("seal_digest"):
+    payload_version = SEAL_VERSION_V1 if seal_version == SEAL_VERSION_V1 else SEAL_VERSION
+    if seal_digest(candidate, art["digest"], tests_digest(snap_dir / "tests"),
+                   seal_version=payload_version) != record.get("seal_digest"):
         block("SEAL_DIGEST_MISMATCH", "frozen core changed after seal")
     return {"ok": not violations,
             "verdict": "FROZEN_CANDIDATE_UNCHANGED" if not violations
@@ -534,7 +547,7 @@ def referenced_candidate_ids(registry_root) -> set[str]:
 def freeze_candidate_dir(candidate_dir: Path, store_root,
                          *, namespace: str = "F+", sealed_at: str | None = None,
                          registry_root=None) -> dict:
-    """Pilot adapter: freeze a prototype candidate directory as a v1 Frozen
+    """Pilot adapter: freeze a prototype candidate directory as a v2 Frozen
     Candidate (canonical artifact identity, write-once record)."""
     cand = Path(candidate_dir)
     meta = json.loads((cand / "candidate.json").read_text())

@@ -38,12 +38,14 @@ from pilot.managed_runtime import (  # noqa: E402
     ManagedRuntimeError,
     create_deployment,
     create_version,
+    execution_snapshot_identity,
     get_deployment,
     get_runtime_instances,
     get_runtime_status,
     reconcile,
     revoke_version,
     set_desired_state,
+    upgrade,
 )
 
 CONFIRM = {"operator": "test", "confirm": True}
@@ -157,19 +159,53 @@ def canonical_env(tmp: pathlib.Path, *, cand_id: str = "cand-10.3",
     }
 
 
-def _simulate_upgrade(state_root: pathlib.Path, deployment: dict,
-                      version_id: str) -> None:
-    """Directly append a deployment_update event with a new desired version.
+def seed_version(env: dict, *, cand_id: str = "cand-v2", version: int = 2,
+                 main: bytes = b"print('B')\n") -> dict:
+    """Publish a second AgentVersion record without touching the registry.
 
-    Stage 1 has no upgrade API; this simulates the deferred Phase 10.4
-    upgrade mechanism so VERSION_DRIFT detection can be tested.
+    registry.promote() is single-adoption/write-once (ENTRY_BINDING_CONFLICT),
+    so the canonical pilot cannot publish v2 for the same agent yet; Stage 2
+    seeds the version record directly to exercise lifecycle semantics.
     """
-    event = dict(deployment)
-    event["event"] = "deployment_updated"
-    event["version_id"] = version_id
-    path = state_root / "deployments.jsonl"
+    cand = build_candidate(env["state_root"].parent, cand_id, NAME,
+                           main=main, version=version)
+    frozen = freeze_candidate_dir(cand, env["frozen_root"], namespace="F+",
+                                  registry_root=env["registry_root"])
+    assert frozen["ok"], frozen
+    evaluation = bind_evaluation(base_evaluation(f"eval-{cand_id}"),
+                                 frozen["record"]["candidate_id"],
+                                 frozen["record"]["artifact_digest"],
+                                 frozen["record"]["seal_digest"])
+    issued = issue_authority(env["registry_root"], cand, evaluation,
+                             confirm=CONFIRM, frozen_root=env["frozen_root"])
+    assert issued["verdict"] == "AUTHORITY_ISSUED", issued
+    authority = issued["authority"]
+    event = {
+        "schema": "managed_runtime_v1",
+        "event": "version_created",
+        "state": "ACTIVE",
+        "version_id": f"v{version}",
+        "agent_id": env["entry"]["capability_id"],
+        "name": NAME,
+        "family": "F+",
+        "candidate_id": frozen["record"]["candidate_id"],
+        "candidate_version": authority["candidate_version"],
+        "artifact_digest": authority["artifact_digest"],
+        "seal_digest": authority["seal_digest"],
+        "execution_snapshot_identity": execution_snapshot_identity(
+            frozen["record"]["candidate_id"], authority["artifact_digest"],
+            authority["seal_digest"]),
+        "authority_id": authority["authority_id"],
+        "promotion_decision_id": authority["promotion_decision_id"],
+        "evaluation_run_id": authority["evaluation_run_id"],
+        "registry_root": str(env["registry_root"]),
+        "frozen_root": str(env["frozen_root"]),
+        "created_at": "2026-08-19T00:00:00Z",
+    }
+    path = env["state_root"] / "versions.jsonl"
     with path.open("a") as fh:
         fh.write(json.dumps(event, sort_keys=True) + "\n")
+    return event
 
 
 def test_a_desired_running_starts_instance(tmp_path):
@@ -230,25 +266,29 @@ def test_c_reconcile_running_is_idempotent(tmp_path):
     assert len(rt.starts) == 1
 
 
-def test_d_version_drift_is_reported_not_upgraded(tmp_path):
+def test_d_desired_version_change_upgrades_to_target(tmp_path):
     env = canonical_env(tmp_path)
-    version = create_version(env["state_root"], env["registry_root"],
-                             env["frozen_root"], env["candidate_id"])
-    dep = create_deployment(env["state_root"], version["agent_id"],
-                            version["version_id"], "RUNNING")
+    v1 = create_version(env["state_root"], env["registry_root"],
+                        env["frozen_root"], env["candidate_id"])
+    dep = create_deployment(env["state_root"], v1["agent_id"],
+                            v1["version_id"], "RUNNING")
     rt = FakeRuntime()
     reconcile(env["state_root"], dep["deployment_id"], runtime=rt)
-    instance = get_runtime_instances(env["state_root"], dep["deployment_id"])[0]
+    old = get_runtime_instances(env["state_root"], dep["deployment_id"])[0]
 
-    _simulate_upgrade(env["state_root"], dep, "v2")
-    report = reconcile(env["state_root"], dep["deployment_id"], runtime=rt)
-    assert report["diff"] == "VERSION_DRIFT"
-    assert report["version_drift"] is True
-    assert len(rt.starts) == 1  # no auto upgrade / new start
-    status = get_runtime_status(env["state_root"], instance["instance_id"])
+    v2 = seed_version(env)
+    report = upgrade(env["state_root"], dep["deployment_id"],
+                     v2["version_id"], runtime=rt)
+    assert report["diff"] == "UPGRADE"
+    assert report["verdict"] == "HEALTHY"
+    instances = get_runtime_instances(env["state_root"], dep["deployment_id"])
+    assert instances[0]["observed_state"] == "STOPPED"
+    assert instances[1]["version_id"] == v2["version_id"]
+    assert instances[1]["observed_state"] == "RUNNING"
+    status = get_runtime_status(env["state_root"], old["instance_id"])
     assert status["version_drift"] is True
-    assert status["desired_version"] == "v2"
-    assert status["observed_version"] == version["version_id"]
+    assert status["desired_version"] == v2["version_id"]
+    assert status["observed_version"] == v1["version_id"]
 
 
 def test_e_snapshot_mismatch_rejects_start(tmp_path):

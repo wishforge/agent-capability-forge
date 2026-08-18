@@ -398,18 +398,9 @@ def _report(state_root: Path, dep: dict, diff: str, verdict: str, *,
 
 def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
     """Diff Deployment desired state against RuntimeInstance observed state
-    and apply the minimal Stage 1 action (START / STOP / NO-OP / REJECT)."""
+    and apply the minimal action (START / STOP / UPGRADE / NO-OP / REJECT)."""
     state_root = Path(state_root)
     dep = get_deployment(state_root, deployment_id)
-    active = _active_instance(state_root, deployment_id)
-
-    if active is not None and active["observed_state"] in ("RUNNING", "STARTING", "STOPPING") \
-            and active["version_id"] != dep["version_id"]:
-        return _report(
-            state_root, dep, "VERSION_DRIFT", "VERSION_DRIFT",
-            version_drift=True, instance=active,
-            reason=f"desired={dep['version_id']} observed={active['version_id']}")
-
     version = _version(state_root, dep["version_id"])
     if version is None:
         return _report(state_root, dep, "RECONCILE_REQUIRED", "VERSION_NOT_FOUND",
@@ -417,6 +408,7 @@ def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
 
     runtime = runtime or DockerRuntime(state_root=state_root)
     desired = dep["desired_state"]
+    active = _active_instance(state_root, deployment_id)
 
     if desired == "RUNNING":
         if _version_revoked(version):
@@ -426,6 +418,27 @@ def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
             return _report(state_root, dep, "REJECT", "REJECT",
                            reason="execution_snapshot_identity does not match "
                                   "candidate_id/artifact_digest/seal_digest")
+        if active is not None and active["version_id"] != dep["version_id"]:
+            old = active
+            if old["observed_state"] in ("RUNNING", "READY", "STARTING"):
+                stopped, ok = _stop(state_root, old, runtime)
+                if not ok:
+                    return _report(state_root, dep, "STOP", "FAILED",
+                                   instance=stopped,
+                                   reason=f"stop {old['version_id']} before switch failed")
+            elif old["observed_state"] == "STOPPING":
+                return _report(state_root, dep, "VERSION_DRIFT",
+                               "RECONCILE_REQUIRED", version_drift=True,
+                               instance=old,
+                               reason=f"old version {old['version_id']} stopping")
+            elif old["observed_state"] != "FAILED":
+                return _report(state_root, dep, "NO-OP", "RECONCILE_REQUIRED",
+                               instance=old)
+            instance, ok = _start(state_root, dep, version, runtime)
+            return _report(state_root, dep, "UPGRADE",
+                           "HEALTHY" if ok else "FAILED", instance=instance,
+                           reason=f"version switch {old['version_id']} -> "
+                                  f"{dep['version_id']}")
         if active is None or active["observed_state"] == "STOPPED":
             instance, ok = _start(state_root, dep, version, runtime, attempt=1)
             return _report(state_root, dep, "START",
@@ -456,22 +469,80 @@ def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
                        instance=active)  # STOPPING in transition
 
     # desired == REVOKED
-    if active is None:
+    instances = get_runtime_instances(state_root, dep["deployment_id"])
+    current = instances[-1] if instances else None
+    if current is None:
         return _report(state_root, dep, "NO-OP", "REVOKED")
-    if active["observed_state"] in ("STOPPED", "FAILED", "REVOKED"):
-        if active["observed_state"] in ("STOPPED", "FAILED"):
-            instance = _append_instance(state_root, active, "REVOKED",
-                                        "instance_revoked", stopped_at=_now())
-            return _report(state_root, dep, "REVOKE", "REVOKED", instance=instance)
-        return _report(state_root, dep, "NO-OP", "REVOKED", instance=active)
-    if active["observed_state"] in ("RUNNING", "STARTING", "READY"):
-        stopped, ok = _stop(state_root, active, runtime)
+    if current["observed_state"] in ("STOPPED", "FAILED", "READY"):
+        instance = _append_instance(state_root, current, "REVOKED",
+                                    "instance_revoked", stopped_at=_now())
+        return _report(state_root, dep, "REVOKE", "REVOKED", instance=instance)
+    if current["observed_state"] == "REVOKED":
+        return _report(state_root, dep, "NO-OP", "REVOKED", instance=current)
+    if current["observed_state"] in ("RUNNING", "STARTING"):
+        stopped, ok = _stop(state_root, current, runtime)
         if ok:
             instance = _append_instance(state_root, stopped, "REVOKED",
                                         "instance_revoked", stopped_at=_now())
             return _report(state_root, dep, "STOP", "REVOKED", instance=instance)
         return _report(state_root, dep, "STOP", "FAILED", instance=stopped)
-    return _report(state_root, dep, "NO-OP", "RECONCILE_REQUIRED", instance=active)
+    return _report(state_root, dep, "NO-OP", "RECONCILE_REQUIRED", instance=current)
+
+
+def _validate_target_version(state_root: Path, dep: dict,
+                             target_version_id: str) -> dict:
+    version = _version(state_root, target_version_id)
+    if version is None:
+        raise ManagedRuntimeError("VERSION_NOT_FOUND",
+                                  f"version_id={target_version_id}")
+    if version["agent_id"] != dep["agent_id"]:
+        raise ManagedRuntimeError("AGENT_VERSION_MISMATCH",
+                                  f"agent_id={dep['agent_id']} "
+                                  f"version={target_version_id}")
+    if _version_revoked(version):
+        raise ManagedRuntimeError("VERSION_REVOKED",
+                                  f"version_id={target_version_id}")
+    if _snapshot_binding_violation(version):
+        raise ManagedRuntimeError(
+            "SNAPSHOT_BINDING_MISMATCH",
+            f"version_id={target_version_id} snapshot identity mismatch")
+    frozen = frozen_checks(Path(version["frozen_root"]), version["candidate_id"])
+    if not frozen["ok"]:
+        raise ManagedRuntimeError(
+            "SNAPSHOT_INVALID",
+            json.dumps(frozen["violations"], ensure_ascii=False))
+    return version
+
+
+def upgrade(state_root, deployment_id: str, target_version_id: str,
+            runtime=None) -> dict:
+    """Set Deployment desired version to target (RUNNING) and reconcile.
+
+    Validates target before any state change; same target/state is a NO-OP.
+    A failed start leaves desired=target and observed=FAILED; Stage 2 does
+    not implement implicit auto-rollback.
+    """
+    state_root = Path(state_root)
+    dep = get_deployment(state_root, deployment_id)
+    if dep["desired_state"] == "REVOKED":
+        raise ManagedRuntimeError("REVOKED_TERMINAL",
+                                  "cannot upgrade a REVOKED deployment")
+    _validate_target_version(state_root, dep, target_version_id)
+    if dep["version_id"] != target_version_id or dep["desired_state"] != "RUNNING":
+        event = dict(dep)
+        event.update({"event": "deployment_updated",
+                      "version_id": target_version_id,
+                      "desired_state": "RUNNING",
+                      "updated_at": _now()})
+        _append(state_root / "deployments.jsonl", event)
+    return reconcile(state_root, deployment_id, runtime=runtime)
+
+
+def rollback(state_root, deployment_id: str, target_version_id: str,
+             runtime=None) -> dict:
+    """Rollback is the same mechanism as upgrade: point Deployment at an
+    older immutable Version and reconcile; Version records are never mutated."""
+    return upgrade(state_root, deployment_id, target_version_id, runtime=runtime)
 
 
 def get_runtime_status(state_root, instance_id: str) -> dict:

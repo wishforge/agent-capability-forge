@@ -26,12 +26,14 @@ from pilot.adoption_authority import (
     REVOCABLE_STATUSES,
     authority_id_for,
     dir_digest,
+    integrity_anchor_violations,
     issuer_allowed,
     load_authority_events,
     load_authority_record,
     load_store,
     revocation_violations,
     store_integrity_mode,
+    write_trust_anchor,
 )
 from pilot.registry import BINDING_KEYS, AdoptionBlocked
 
@@ -297,6 +299,9 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
                 }
             ]
         )
+    anchor_violations = integrity_anchor_violations(store, registry_root)
+    if anchor_violations:
+        raise AdoptionBlocked(anchor_violations)
     adoption = entry.get("adoption") or {}
     store_authority = _authority(store, adoption.get("promotion_decision_id"))
     file_authority = None
@@ -385,6 +390,9 @@ def mark_promoted(registry_root, entry: dict) -> None:
                 }
             ]
         )
+    anchor_violations = integrity_anchor_violations(store, registry_root)
+    if anchor_violations:
+        raise AdoptionBlocked(anchor_violations)
     adoption = entry.get("adoption") or {}
     if entry.get("state") != "promoted":
         raise AdoptionBlocked(
@@ -410,6 +418,11 @@ def mark_promoted(registry_root, entry: dict) -> None:
     tmp = path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(store, indent=2) + "\n")
     os.replace(tmp, path)
+    anchor_code = write_trust_anchor(registry_root, store)
+    if anchor_code:
+        raise AdoptionBlocked(
+            [{"code": anchor_code, "message": "trust anchor update failed"}]
+        )
 
 
 __all__ = [

@@ -16,6 +16,7 @@ from pilot.adoption_authority import (
     HARDENED_MODE,
     authority_id_for,
     dir_digest,
+    integrity_anchor_violations,
     load_authority_record,
     load_store,
     store_integrity_mode,
@@ -72,6 +73,9 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
                 }
             ]
         )
+    anchor_violations = integrity_anchor_violations(store, registry_root)
+    if anchor_violations:
+        raise AdoptionBlocked(anchor_violations)
 
     cand = Path(candidate_dir)
     artifact = cand / "implementation" / "artifact"

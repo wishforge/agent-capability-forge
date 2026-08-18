@@ -22,11 +22,13 @@ from pilot.adoption_authority import (
     TRUSTED_ISSUERS_ENV,
     authority_id_for,
     dir_digest,
+    integrity_anchor_violations,
     issuer_allowed,
     load_store,
     mark_store_hardened,
     validate,
     write_authority_record,
+    write_trust_anchor,
 )
 
 DEFAULT_POLICY_REF = "pilot-promotion-rule-v1"
@@ -202,7 +204,12 @@ def issue_authority(
             "transitions": [{"from": "PROMOTABLE", "to": "PROMOTED"}],
         }
 
-    store = load_store(registry_root) or {}
+    loaded = load_store(registry_root)
+    if loaded is not None:
+        anchor_violations = integrity_anchor_violations(loaded, registry_root)
+        if anchor_violations:
+            return _blocked(anchor_violations)
+    store = loaded or {}
     store.setdefault("policies", {})
     store.setdefault("candidates", {})
     store.setdefault("runs", [])
@@ -281,6 +288,11 @@ def issue_authority(
     tmp = path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(store, indent=2) + "\n")
     os.replace(tmp, path)
+    anchor_code = write_trust_anchor(registry_root, store)
+    if anchor_code:
+        return _blocked(
+            [{"code": anchor_code, "message": "trust anchor update failed"}]
+        )
     return {
         "verdict": "AUTHORITY_ISSUED",
         "authority": authority,

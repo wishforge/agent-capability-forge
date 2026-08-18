@@ -36,6 +36,8 @@ STORE_METADATA_KEY = "store_metadata"
 HARDENED_MODE = "hardened"
 LEGACY_MODE = "legacy"
 HARDENED_SCHEMA_VERSION = "adoption_store_v2"
+ANCHOR_SCHEMA_VERSION = "integrity_anchor_v1"
+TRUST_ANCHOR_ENV = "PILOT_INTEGRITY_ANCHOR"
 DEFAULT_ISSUER_ID = "pilot-rehearsal"
 TRUSTED_ISSUERS_ENV = "PILOT_TRUSTED_ISSUERS"
 
@@ -54,10 +56,16 @@ def dir_digest(directory: Path) -> str:
         for p in sorted(directory.rglob("*"))
         if p.is_file()
     }
-    canonical = json.dumps(
-        files, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+    return _sha256(_canonical(files))
+
+
+def _canonical(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
+
+
+def _sha256(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def load_store(registry_root: Path) -> dict | None:
@@ -76,6 +84,193 @@ def mark_store_hardened(store: dict) -> None:
     store.setdefault(STORE_METADATA_KEY, {})
     store[STORE_METADATA_KEY]["schema_version"] = HARDENED_SCHEMA_VERSION
     store[STORE_METADATA_KEY]["integrity_mode"] = HARDENED_MODE
+    store[STORE_METADATA_KEY].setdefault("store_id", "store-" + uuid.uuid4().hex[:12])
+
+
+def integrity_anchor_path(registry_root) -> Path:
+    """External anchor location: env override, else a sibling of the store dir.
+
+    The sibling default is NOT a trust anchor by itself (same filesystem
+    writer can reach it); it exists so tests/operators can seal explicitly.
+    Sealing also sets store_metadata.trust_anchor_sealed = True so deleting
+    the anchor later fails closed instead of downgrading to legacy.
+    """
+    env = os.environ.get(TRUST_ANCHOR_ENV)
+    root = Path(registry_root).resolve()
+    return Path(env).resolve() if env else root.parent / f"{root.name}.integrity-anchor.json"
+
+
+def authority_manifest_digest(registry_root) -> str:
+    """sha256 root over {authority_id: sha256(canonical record)} for authorities/*.json."""
+    auth_dir = Path(registry_root) / AUTHORITY_DIR_NAME
+    manifest: dict[str, str] = {}
+    if auth_dir.is_dir():
+        for p in sorted(auth_dir.glob("*.json")):
+            manifest[p.stem] = _sha256(_canonical(json.loads(p.read_text())))
+    return _sha256(_canonical(manifest))
+
+
+def revocation_manifest_digest(registry_root) -> str:
+    """sha256 root over {authority_id: sha256(events file bytes)} for *.events.jsonl."""
+    auth_dir = Path(registry_root) / AUTHORITY_DIR_NAME
+    manifest: dict[str, str] = {}
+    if auth_dir.is_dir():
+        for p in sorted(auth_dir.glob("*.events.jsonl")):
+            manifest[p.name.removesuffix(".events.jsonl")] = _sha256(p.read_bytes())
+    return _sha256(_canonical(manifest))
+
+
+def integrity_anchor_violations(store: dict, registry_root) -> list[dict]:
+    """Fail-closed anchor checks; unsealed store => legacy (Phase 8.4.2) mode.
+
+    Sealed store => anchor must exist and every anchored digest MUST match.
+    Any mismatch is INTEGRITY_STORE_CORRUPTED, never LEGACY.
+    """
+    root = Path(registry_root).resolve()
+    path = integrity_anchor_path(registry_root)
+    if path.is_relative_to(root):
+        return [{"code": "INTEGRITY_STORE_CORRUPTED",
+                 "message": "trust anchor must be outside the store directory"}]
+    if not path.exists():
+        if (store.get(STORE_METADATA_KEY) or {}).get("trust_anchor_sealed") is True:
+            return [{"code": "INTEGRITY_STORE_CORRUPTED",
+                     "message": "store is sealed but trust anchor missing"}]
+        return []
+    try:
+        anchor = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return [{"code": "INTEGRITY_STORE_CORRUPTED",
+                 "message": "trust anchor unreadable"}]
+
+    violations: list[dict] = []
+
+    def corrupt(message: str) -> None:
+        violations.append({"code": "INTEGRITY_STORE_CORRUPTED", "message": message})
+
+    metadata = store.get(STORE_METADATA_KEY) or {}
+    sealed = metadata.get("trust_anchor_sealed") is True
+    if store_integrity_mode(store) != HARDENED_MODE:
+        corrupt("trust anchor exists but store metadata is not hardened (downgrade attempt)")
+    if sealed != path.exists():
+        corrupt("trust anchor exists but store is not sealed"
+                if path.exists() else "store is sealed but trust anchor missing")
+    if anchor.get("schema") != ANCHOR_SCHEMA_VERSION:
+        corrupt(f"trust anchor schema={anchor.get('schema')} expected={ANCHOR_SCHEMA_VERSION}")
+    if anchor.get("store_id") != metadata.get("store_id"):
+        corrupt("trust anchor store_id mismatch")
+    if anchor.get("schema_version") != metadata.get("schema_version"):
+        corrupt("trust anchor schema_version mismatch")
+    if anchor.get("integrity_mode") != HARDENED_MODE:
+        corrupt("trust anchor integrity_mode mismatch")
+    try:
+        actual = {
+            "store_digest": _sha256(_canonical(store)),
+            "authority_manifest_digest": authority_manifest_digest(registry_root),
+            "revocation_manifest_digest": revocation_manifest_digest(registry_root),
+        }
+    except (OSError, json.JSONDecodeError) as exc:
+        corrupt(f"ledger manifest unreadable: {exc}")
+        return violations
+    for field, expected in actual.items():
+        if anchor.get(field) != expected:
+            corrupt(f"trust anchor {field} mismatch")
+    return violations
+
+
+def write_trust_anchor(registry_root, store: dict | None = None,
+                       *, create_only: bool = False) -> str | None:
+    """Create (seal) or refresh the external integrity anchor.
+
+    Returns None on success / no-op, or a fail-closed error code.
+    Refresh only happens when an anchor already exists; sealing is
+    create-only so a corrupted anchor is never silently repaired.
+    """
+    path = integrity_anchor_path(registry_root)
+    if path.is_relative_to(Path(registry_root).resolve()):
+        return "TRUST_ANCHOR_CONFIG_INVALID"
+    if create_only and path.exists():
+        return "TRUST_ANCHOR_ALREADY_EXISTS"
+    if not create_only and not path.exists():
+        return None
+    if store is None:
+        store = load_store(registry_root)
+    if store is None:
+        return "MISSING_ADOPTION_STORE"
+    if store_integrity_mode(store) != HARDENED_MODE:
+        return "INTEGRITY_STORE_CORRUPTED"
+    existing = None
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return "TRUST_ANCHOR_CORRUPTED"
+    try:
+        revision = int(existing.get("anchor_revision", 0)) + 1 if existing else 1
+    except (TypeError, ValueError):
+        return "TRUST_ANCHOR_CORRUPTED"
+    metadata = store.get(STORE_METADATA_KEY) or {}
+    anchor = {
+        "schema": ANCHOR_SCHEMA_VERSION,
+        "store_id": metadata.get("store_id"),
+        "integrity_mode": HARDENED_MODE,
+        "schema_version": metadata.get("schema_version"),
+        "store_digest": _sha256(_canonical(store)),
+        "authority_manifest_digest": authority_manifest_digest(registry_root),
+        "revocation_manifest_digest": revocation_manifest_digest(registry_root),
+        "anchor_created_at": datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "anchor_revision": revision,
+    }
+    if existing is not None and all(
+        existing.get(k) == anchor[k]
+        for k in ("store_id", "store_digest", "authority_manifest_digest",
+                  "revocation_manifest_digest")
+    ):
+        return None  # no content change, no revision churn
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, (json.dumps(anchor, indent=2) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
+    return None
+
+
+def seal_trust_anchor(registry_root, store: dict | None = None) -> str | None:
+    """Explicit operator action: seal a hardened store with an external anchor.
+
+    Create-only: an existing anchor is never overwritten, and a corrupted
+    anchor is never silently repaired. Also records trust_anchor_sealed in
+    store_metadata so anchor deletion fails closed instead of downgrading.
+    """
+    path = integrity_anchor_path(registry_root)
+    if path.is_relative_to(Path(registry_root).resolve()):
+        return "TRUST_ANCHOR_CONFIG_INVALID"
+    if path.exists():
+        return "TRUST_ANCHOR_ALREADY_EXISTS"
+    if store is None:
+        store = load_store(registry_root)
+    if store is None:
+        return "MISSING_ADOPTION_STORE"
+    if store_integrity_mode(store) != HARDENED_MODE:
+        return "INTEGRITY_STORE_CORRUPTED"
+    store.setdefault(STORE_METADATA_KEY, {})["trust_anchor_sealed"] = True
+    code = write_trust_anchor(registry_root, store, create_only=True)
+    if code:
+        return code
+    store_path = Path(registry_root) / STORE_FILENAME
+    tmp = store_path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(store, indent=2) + "\n")
+    os.replace(tmp, store_path)
+    _fsync_directory(store_path.parent)
+    return None
 
 
 def trusted_issuers() -> frozenset[str]:
@@ -185,6 +380,17 @@ def revoke_authority(
     reason: str = "",
 ) -> dict:
     """Append-only REVOKED / SUPERSEDED transition; never rewrites the record."""
+    store = load_store(registry_root)
+    if store is not None:
+        anchor_violations = integrity_anchor_violations(store, registry_root)
+        if anchor_violations:
+            v = anchor_violations[0]
+            return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                    "code": v["code"], "message": v["message"]}
+    elif integrity_anchor_path(registry_root).exists():
+        return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                "code": "INTEGRITY_STORE_CORRUPTED",
+                "message": "trust anchor exists but adoption_store.json is missing"}
     try:
         record = load_authority_record(registry_root, authority_id)
     except (OSError, json.JSONDecodeError):
@@ -219,7 +425,6 @@ def revoke_authority(
     }
     append_authority_event(registry_root, event)
     # Best-effort sync into the legacy flat store; the event file is durable.
-    store = load_store(registry_root)
     if store is not None:
         revocations = store.setdefault("revocations", [])
         # explicit normalization layer: legacy copies written before
@@ -232,6 +437,11 @@ def revoke_authority(
         tmp = path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")
         tmp.write_text(json.dumps(store, indent=2) + "\n")
         os.replace(tmp, path)
+        anchor_code = write_trust_anchor(registry_root, store)
+        if anchor_code:
+            return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                    "code": anchor_code,
+                    "message": f"trust anchor update failed: {anchor_code}"}
     return {"verdict": "REVOKED", "allowed": True,
             "revocation_id": event["revocation_id"], "event": event}
 

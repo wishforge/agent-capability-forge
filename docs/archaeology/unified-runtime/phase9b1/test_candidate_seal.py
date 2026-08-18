@@ -142,6 +142,7 @@ class CandidateSealTests(unittest.TestCase):
             cand = bind_digests(make_candidate(), root)
             freeze_candidate(cand, root / "artifact", root / "tests", store)
             snap = store / "frozen" / cand["candidate_id"] / "artifact" / "main.py"
+            snap.chmod(0o644)
             snap.write_bytes(b"print(2)\n")
             verify = verify_frozen(store, cand["candidate_id"])
             self.assertFalse(verify["ok"])
@@ -159,6 +160,7 @@ class CandidateSealTests(unittest.TestCase):
             manifest = store / "frozen" / cand["candidate_id"] / "candidate.json"
             data = json.loads(manifest.read_text())
             data["manifest"]["capability"]["version"] = 2
+            manifest.chmod(0o644)
             manifest.write_text(json.dumps(data))
             verify = verify_frozen(store, cand["candidate_id"])
             self.assertFalse(verify["ok"])
@@ -175,6 +177,7 @@ class CandidateSealTests(unittest.TestCase):
             cand = bind_digests(make_candidate(), root)
             freeze_candidate(cand, root / "artifact", root / "tests", store)
             snap = store / "frozen" / cand["candidate_id"] / "tests" / "t1" / "data.csv"
+            snap.chmod(0o644)
             snap.write_bytes(b"id,tampered\n")
             verify = verify_frozen(store, cand["candidate_id"])
             self.assertFalse(verify["ok"])
@@ -205,6 +208,7 @@ class CandidateSealTests(unittest.TestCase):
                     cand_path = store / "frozen" / cand["candidate_id"] / "candidate.json"
                     data = json.loads(cand_path.read_text())
                     data[key] = value
+                    cand_path.chmod(0o644)
                     cand_path.write_text(json.dumps(data))
                     verify = verify_frozen(store, cand["candidate_id"])
                     self.assertFalse(verify["ok"])
@@ -218,8 +222,10 @@ class CandidateSealTests(unittest.TestCase):
             cand = bind_digests(make_candidate(), root)
             frozen = freeze_candidate(cand, root / "artifact", root / "tests", store)
             (root / "evaluation.json").write_text('{"verdict": "PASS"}\n')
+            store.chmod(0o755)
             (store / "evaluation.json").write_text('{"verdict": "PASS"}\n')
             (store / "validation.json").write_text('{"ok": true}\n')
+            store.chmod(0o555)
             verify = verify_frozen(store, cand["candidate_id"])
             self.assertTrue(verify["ok"], verify["violations"])
             self.assertEqual(get_seal_digest(store, cand["candidate_id"]),

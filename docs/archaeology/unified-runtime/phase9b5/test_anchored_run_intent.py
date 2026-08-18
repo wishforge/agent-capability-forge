@@ -112,6 +112,8 @@ def canonical_env(tmp: pathlib.Path, *, cand_id: str, name: str,
         "frozen_root": frozen_root,
         "entry": entry,
         "artifact_dir": pathlib.Path(entry["artifact_dir"]),
+        "snapshot": frozen_root / "frozen" / entry["adoption"]["candidate_id"]
+        / "artifact",
         "identity": {
             "candidate_id": entry["adoption"]["candidate_id"],
             "candidate_version": entry["adoption"]["candidate_version"],
@@ -178,6 +180,7 @@ def make_harness(tmp: pathlib.Path, env: dict, monkeypatch) -> harness_mod.Harne
     monkeypatch.setattr(harness_mod, "docker_launch", lambda *a, **k: {
         "sandbox_id": "cbx-9b5", "exit_code": 0, "stdout": "ok", "stderr": "",
         "elapsed_s": 0.1, "timed_out": False})
+    monkeypatch.setattr(harness_mod.os, "getuid", lambda: 65534)
     return h
 
 
@@ -251,7 +254,7 @@ def test_b_b3_entry_deletion_rebuilds_from_run_intent(tmp_path, monkeypatch) -> 
     ids = h.phase_future("b3")
     assert len(ids) == 1
     assert len(calls) == 1
-    assert any(str(m[0]) == str(env["artifact_dir"]) for m in calls[0][1])
+    assert any(str(m[0]) == str(env["snapshot"]) for m in calls[0][1])
     rebuilt = json.loads((env["state"] / "b3_entry.json").read_text())
     assert rebuilt["candidate_id"] == "cand-A"
     assert rebuilt["artifact_digest"] == env["identity"]["artifact_digest"]
@@ -332,7 +335,7 @@ def test_e_positive_canonical_run_allows_a(tmp_path, monkeypatch) -> None:
     ids = h.phase_future("b3")
     assert len(ids) == 1
     assert len(calls) == 1
-    assert any(str(m[0]) == str(env["artifact_dir"]) for m in calls[0][1])
+    assert any(str(m[0]) == str(env["snapshot"]) for m in calls[0][1])
     records = rr.load_records(h.records_path)
     assert records[0]["capability_used"] == env["entry"]["capability_id"]
 

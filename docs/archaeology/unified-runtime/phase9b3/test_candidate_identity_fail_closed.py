@@ -16,6 +16,7 @@ R8 : verify_at_mount binds the verified artifact_dir; a different mount
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import tempfile
 
@@ -39,6 +40,7 @@ from pilot.registry import AdoptionBlocked, promote  # noqa: E402
 from pilot import runtime_adoption_guard as guard  # noqa: E402
 
 CONFIRM = {"operator": "test", "confirm": True}
+RUNTIME_UID = 65534  # non-owner runtime identity for canonical execution
 
 
 def build_candidate(tmp: pathlib.Path, cand_id: str, name: str, *,
@@ -104,6 +106,8 @@ def canonical_env(tmp: pathlib.Path, *, cand_id: str, name: str,
         "frozen_root": frozen_root,
         "entry": entry,
         "artifact_dir": pathlib.Path(entry["artifact_dir"]),
+        "snapshot": frozen_root / "frozen" / entry["adoption"]["candidate_id"]
+        / "artifact",
         "identity": {
             "candidate_id": entry["adoption"]["candidate_id"],
             "candidate_version": entry["adoption"]["candidate_version"],
@@ -117,7 +121,8 @@ def mount(env: dict, expected_identity: dict, *, mount_source=None) -> dict:
     return guard.verify_at_mount(
         env["registry_root"], env["entry"], env["artifact_dir"],
         expected_identity=expected_identity,
-        mount_source=mount_source if mount_source is not None else env["artifact_dir"])
+        mount_source=mount_source if mount_source is not None else env["snapshot"],
+        runtime_uid=RUNTIME_UID)
 
 
 def blocked_codes(exc: AdoptionBlocked) -> set[str]:
@@ -253,13 +258,10 @@ def test_i_authority_a_runtime_b_rejected() -> None:
         env_b = canonical_env(tmp, cand_id="cand-B", name="foo",
                               main=b"print('B')\n", family="F+2")
         # Authority A remains the store/ledger truth; runtime points at B's
-        # artifact bytes. adopt() must already reject (ARTIFACT_DIGEST_MISMATCH).
-        entry = json.loads(json.dumps(env_a["entry"]))
-        entry["artifact_dir"] = str(env_b["artifact_dir"])
+        # execution snapshot. verify_at_mount must reject the binding.
         with pytest.raises(AdoptionBlocked) as ei:
-            guard.adopt(env_a["registry_root"], entry, env_b["artifact_dir"],
-                        frozen_root=env_a["frozen_root"])
-        assert "ARTIFACT_DIGEST_MISMATCH" in blocked_codes(ei.value)
+            mount(env_a, env_a["identity"], mount_source=env_b["snapshot"])
+        assert "RUNTIME_BINDING_MISMATCH" in blocked_codes(ei.value)
 
 
 # --------------------------------------------------------------------------
@@ -298,7 +300,7 @@ def test_identity_match_allows() -> None:
         assert report["candidate_id"] == "cand-A"
         assert report["candidate_version"] == "v1"
         assert report["seal_digest"] == env["identity"]["seal_digest"]
-        assert report["verified_artifact_dir"] == str(env["artifact_dir"].resolve())
+        assert report["verified_artifact_dir"] == str(env["snapshot"].resolve())
 
 
 # --------------------------------------------------------------------------
@@ -317,6 +319,7 @@ def test_r3_new_seal_is_v2_and_schema_version_covered() -> None:
         mutated = json.loads(json.dumps(record))
         mutated["schema"] = "frozen-candidate-v3"
         rec_path = env["frozen_root"] / "frozen" / "cand-A.json"
+        rec_path.chmod(0o644)
         rec_path.write_text(json.dumps(mutated, indent=2) + "\n")
         check = verify_frozen(env["frozen_root"], "cand-A")
         assert not check["ok"]
@@ -331,6 +334,7 @@ def test_r3_v2_record_cannot_be_relabeled_as_v1() -> None:
         mutated["schema"] = "frozen-candidate-v1"
         mutated["seal_version"] = "v1"
         rec_path = env["frozen_root"] / "frozen" / "cand-A.json"
+        rec_path.chmod(0o644)
         rec_path.write_text(json.dumps(mutated, indent=2) + "\n")
         check = verify_frozen(env["frozen_root"], "cand-A")
         assert not check["ok"]
@@ -352,6 +356,7 @@ def test_r3_v1_record_still_verifies_with_old_payload() -> None:
         v1["seal_version"] = "v1"
         v1["seal_digest"] = old_digest
         rec_path = env["frozen_root"] / "frozen" / "cand-A.json"
+        rec_path.chmod(0o644)
         rec_path.write_text(json.dumps(v1, indent=2) + "\n")
         check = verify_frozen(env["frozen_root"], "cand-A")
         assert check["ok"], check
@@ -360,6 +365,7 @@ def test_r3_v1_record_still_verifies_with_old_payload() -> None:
         relabeled = json.loads(json.dumps(v1))
         relabeled["schema"] = "frozen-candidate-v2"
         relabeled["seal_version"] = "v2"
+        rec_path.chmod(0o644)
         rec_path.write_text(json.dumps(relabeled, indent=2) + "\n")
         check = verify_frozen(env["frozen_root"], "cand-A")
         assert not check["ok"]

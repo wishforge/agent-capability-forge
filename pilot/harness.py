@@ -764,7 +764,13 @@ class Harness:
                     rec["oracle"] = {"verdict": "ERROR", "reason": "codex exec failed",
                                      "stable": False, "runs": []}
             elif arm == "b3":
-                artifact_dir = Path(entry["artifact_dir"])
+                if run_request is not None:
+                    # O1: canonical execution source is the immutable frozen
+                    # snapshot E(D), never the mutable registry live copy.
+                    artifact_dir = Path(entry["frozen_root"]) / "frozen" \
+                        / run_request["candidate_id"] / "artifact"
+                else:
+                    artifact_dir = Path(entry["artifact_dir"])
                 adopted = runtime_guard.adopt(self.registry_root, entry, artifact_dir)
                 out = run_dir / "output"
                 out.mkdir()

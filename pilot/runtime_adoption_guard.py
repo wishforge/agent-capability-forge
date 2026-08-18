@@ -100,6 +100,86 @@ def _missing_provenance(prov, run_id: str | None) -> list[str]:
     return missing
 
 
+def _write_access(stat: os.stat_result, uid: int, gids: set[int]) -> bool:
+    if stat.st_uid == uid:
+        return bool(stat.st_mode & 0o200)
+    if stat.st_gid in gids:
+        return bool(stat.st_mode & 0o020)
+    return bool(stat.st_mode & 0o002)
+
+
+def _replace_access(stat: os.stat_result, uid: int, gids: set[int]) -> bool:
+    """Can `uid` rename/unlink an entry inside this directory?"""
+    if not _write_access(stat, uid, gids):
+        return False
+    # sticky-bit directories only allow the directory owner (or root) to
+    # remove/rename entries; an unrelated runtime user cannot replace them.
+    return not (stat.st_mode & 0o1000) or stat.st_uid == uid
+
+
+def execution_snapshot_isolation_violations(
+    frozen_root, candidate_id: str, runtime_uid: int | None = None
+) -> list[dict]:
+    """Deployment contract: store owner != runtime user, and the runtime
+    user has no write / replace path into E(D) = frozen/<candidate_id>/artifact.
+
+    Modes alone are not the invariant (the owner can change mode bits);
+    same-owner deployment is rejected explicitly.
+    """
+    frozen_root = Path(frozen_root)
+    runtime_uid = os.getuid() if runtime_uid is None else runtime_uid
+    gids = set(os.getgroups())
+    violations: list[dict] = []
+
+    def block(code: str, message: str) -> None:
+        violations.append({"code": code, "message": message})
+
+    try:
+        store_stat = frozen_root.stat()
+    except OSError:
+        return [{"code": "EXECUTION_SNAPSHOT_STORE_MISSING",
+                 "message": f"frozen_root missing: {frozen_root}"}]
+    if store_stat.st_uid == runtime_uid:
+        block("EXECUTION_SNAPSHOT_OWNER_ISOLATION_REQUIRED",
+              f"store owner uid={store_stat.st_uid} == runtime user uid={runtime_uid}")
+
+    # Runtime user must not be able to replace any ancestor of E(D).
+    path = frozen_root
+    while True:
+        parent = path.parent
+        try:
+            parent_stat = parent.stat()
+        except OSError:
+            break
+        if _replace_access(parent_stat, runtime_uid, gids):
+            block("EXECUTION_SNAPSHOT_STORE_PATH_WRITABLE",
+                  f"{path} can be replaced by runtime user via {parent}")
+            break
+        if parent == path:
+            break
+        path = parent
+
+    snap_dir = frozen_root / "frozen" / candidate_id
+    record_path = frozen_root / "frozen" / f"{candidate_id}.json"
+    dirs = (frozen_root, frozen_root / "frozen", snap_dir, snap_dir / "artifact")
+    for d in dirs:
+        try:
+            if d.exists() and _write_access(d.stat(), runtime_uid, gids):
+                block("EXECUTION_SNAPSHOT_WRITABLE",
+                      f"{d} is writable by runtime user")
+        except OSError:
+            block("EXECUTION_SNAPSHOT_WRITABLE", f"{d} unreadable")
+    for p in ([record_path] if record_path.exists() else []) + (
+        sorted(snap_dir.rglob("*")) if snap_dir.exists() else []):
+        try:
+            if _write_access(p.stat(), runtime_uid, gids):
+                block("EXECUTION_SNAPSHOT_WRITABLE",
+                      f"{p} is writable by runtime user")
+        except OSError:
+            block("EXECUTION_SNAPSHOT_WRITABLE", f"{p} unreadable")
+    return violations
+
+
 def violations_for_runtime_activation(
     entry: dict,
     authority: dict | None,
@@ -413,7 +493,8 @@ def resolve_b3_cache(cache_path, run_request: dict) -> dict:
     return cache
 
 
-def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict:
+def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None,
+          runtime_uid: int | None = None) -> dict:
     """Validate before the pilot B3 runtime activates/executes an artifact.
 
     Fail-closed: any missing/mismatch raises AdoptionBlocked
@@ -498,7 +579,7 @@ def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict
     if is_canonical:
         # New Frozen Candidate path (explicit marker; no legacy fallback):
         # frozen record -> evaluation binding -> canonical digest + exact
-        # layout, all before the existing runtime guard.
+        # layout + owner isolation, all before the existing runtime guard.
         frozen = frozen_checks(frozen_root, adoption.get("candidate_id"))
         if not frozen["ok"]:
             raise AdoptionBlocked(frozen["violations"])
@@ -510,14 +591,18 @@ def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict
             entry.get("evaluation") or {}, frozen["record"])
         if eval_violations:
             raise AdoptionBlocked(eval_violations)
-        art_violations = frozen_artifact_violations(
-            frozen["record"], frozen["candidate"], artifact)
-        if art_violations:
-            raise AdoptionBlocked(art_violations)
+        isolation = execution_snapshot_isolation_violations(
+            frozen_root, adoption.get("candidate_id"), runtime_uid)
+        if isolation:
+            raise AdoptionBlocked(isolation)
+        snapshot = Path(frozen_root) / "frozen" / \
+            adoption.get("candidate_id") / "artifact"
         actual_digest = frozen["record"]["artifact_digest"]
+        verified_artifact_dir = str(snapshot.resolve())
     else:
         # Legacy Phase 8 path: historical artifacts keep legacy semantics.
         actual_digest = legacy_dir_digest(artifact) if artifact.is_dir() else None
+        verified_artifact_dir = str(Path(artifact_dir).resolve())
     violations = violations_for_runtime_activation(
         entry, authority, store, actual_digest, registry_root)
     if violations:
@@ -531,14 +616,14 @@ def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict
         "candidate_version": authority.get("candidate_version"),
         "artifact_digest": actual_digest,
         "seal_digest": authority.get("seal_digest"),
-        "verified_artifact_dir": str(Path(artifact_dir).resolve()),
+        "verified_artifact_dir": verified_artifact_dir,
     }
 
 
 def verify_at_mount(registry_root, entry: dict, artifact_dir,
                     expected_digest: str | None = None,
                     *, frozen_root=None, expected_identity: dict | None = None,
-                    mount_source=None) -> dict:
+                    mount_source=None, runtime_uid: int | None = None) -> dict:
     """Fresh adopt() recheck immediately before docker_launch mounts.
 
     R8 contract: the only legal mount source is the artifact_dir verified
@@ -546,7 +631,8 @@ def verify_at_mount(registry_root, entry: dict, artifact_dir,
     path they will mount and must not re-resolve/replace it between this
     call and the bind mount. verify -> kernel bind-mount OS race = UNKNOWN.
     """
-    report = adopt(registry_root, entry, artifact_dir, frozen_root=frozen_root)
+    report = adopt(registry_root, entry, artifact_dir, frozen_root=frozen_root,
+                   runtime_uid=runtime_uid)
     if expected_identity is not None:
         violations = identity_violations(expected_identity, report)
         if violations:
@@ -632,6 +718,7 @@ __all__ = [
     "AdoptionBlocked",
     "adopt",
     "derived_b3_entry",
+    "execution_snapshot_isolation_violations",
     "identity_violations",
     "load_trusted_run_request",
     "mark_promoted",

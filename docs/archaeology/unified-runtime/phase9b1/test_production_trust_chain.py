@@ -13,6 +13,7 @@ These tests target the real production call chain:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import sys
@@ -40,6 +41,7 @@ import pilot.run_record as rr  # noqa: E402
 NAME = "cap-x"
 CAND_ID = "cand-9b1"
 CONFIRM = {"operator": "test", "confirm": True}
+RUNTIME_UID = 65534  # non-owner runtime identity for canonical execution
 
 
 def build_candidate(tmp_path: pathlib.Path, *, main: bytes = b"print('hi')\n",
@@ -107,11 +109,21 @@ def build_env(tmp_path: pathlib.Path, *, promote_entry: bool = True) -> dict:
     guard.mark_promoted(registry_root, entry)
     env["entry"] = entry
     env["artifact_dir"] = pathlib.Path(entry["artifact_dir"])
+    env["snapshot"] = frozen_root / "frozen" / CAND_ID / "artifact"
     return env
 
 
 def blocked_codes(exc: AdoptionBlocked) -> set[str]:
     return {v["code"] for v in exc.violations}
+
+
+def force_writable_tree(path: pathlib.Path) -> None:
+    if path.is_dir():
+        os.chmod(path, 0o755)
+        for p in path.rglob("*"):
+            os.chmod(p, 0o755 if p.is_dir() else 0o644)
+    else:
+        os.chmod(path, 0o644)
 
 
 def make_harness(tmp_path: pathlib.Path, env: dict, monkeypatch) -> harness_mod.Harness:
@@ -130,6 +142,7 @@ def make_harness(tmp_path: pathlib.Path, env: dict, monkeypatch) -> harness_mod.
     monkeypatch.setattr(harness_mod, "docker_launch", lambda *a, **k: {
         "sandbox_id": "cbx-9b1", "exit_code": 0, "stdout": "ok", "stderr": "",
         "elapsed_s": 0.1, "timed_out": False})
+    monkeypatch.setattr(harness_mod.os, "getuid", lambda: RUNTIME_UID)
     return h
 
 
@@ -167,7 +180,7 @@ def test_evaluation_artifact_digest_mismatch_blocks_runtime() -> None:
         env["entry"]["evaluation"]["artifact_digest"] = "sha256:" + "f" * 64
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "EVALUATION_BINDING_MISMATCH" in blocked_codes(ei.value)
 
 
@@ -222,10 +235,11 @@ def test_frozen_candidate_mutation_blocks_runtime() -> None:
         tmp = pathlib.Path(td)
         env = build_env(tmp)
         snap = env["frozen_root"] / "frozen" / CAND_ID / "artifact" / "main.py"
+        os.chmod(snap, 0o644)
         snap.write_bytes(b"print('tampered')\n")
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "ARTIFACT_DIGEST_MISMATCH" in blocked_codes(ei.value)
 
 
@@ -260,10 +274,11 @@ def test_undeclared_file_before_runtime_blocks() -> None:
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         env = build_env(tmp)
-        (env["artifact_dir"] / "malicious_extra.py").write_text("x=1\n")
+        os.chmod(env["snapshot"], 0o755)
+        (env["snapshot"] / "malicious_extra.py").write_text("x=1\n")
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "UNDECLARED_ARTIFACT_FILE" in blocked_codes(ei.value)
 
 
@@ -274,17 +289,20 @@ def test_runtime_generated_files_cannot_enter_bind_mount() -> None:
         for rel in ("__pycache__/main.cpython-313.pyc", "run.log",
                     "scratch.tmp", "generated/out.txt", "malicious_extra.py"):
             env = build_env(tmp / rel.replace("/", "_"))
-            (env["artifact_dir"] / rel).parent.mkdir(parents=True, exist_ok=True)
-            (env["artifact_dir"] / rel).write_bytes(b"noise")
+            os.chmod(env["snapshot"], 0o755)
+            (env["snapshot"] / rel).parent.mkdir(parents=True, exist_ok=True)
+            (env["snapshot"] / rel).write_bytes(b"noise")
             with pytest.raises(AdoptionBlocked) as ei:
                 guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                            frozen_root=env["frozen_root"])
+                            frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
             assert "UNDECLARED_ARTIFACT_FILE" in blocked_codes(ei.value)
 
 
 def test_phase_future_b3_reads_frozen_candidate_and_blocks(tmp_path, monkeypatch) -> None:
     env = build_env(tmp_path)
     frozen_dir = env["frozen_root"] / "frozen" / CAND_ID
+    force_writable_tree(frozen_dir)
+    os.chmod(frozen_dir.parent, 0o755)
     shutil.rmtree(frozen_dir)
     (env["frozen_root"] / "frozen" / f"{CAND_ID}.json").unlink()
     h = make_harness(tmp_path, env, monkeypatch)
@@ -313,6 +331,7 @@ def test_delete_frozen_record_and_attempt_re_seal_blocks() -> None:
         frozen_dir = env["frozen_root"] / "frozen" / CAND_ID
         record = env["frozen_root"] / "frozen" / f"{CAND_ID}.json"
         # partial deletion: record gone, snapshot remains
+        os.chmod(frozen_dir.parent, 0o755)
         record.unlink()
         re_seal = freeze_candidate_dir(env["candidate"], env["frozen_root"],
                                        registry_root=env["registry_root"])
@@ -320,6 +339,7 @@ def test_delete_frozen_record_and_attempt_re_seal_blocks() -> None:
         assert "FROZEN_CANDIDATE_INCOMPLETE" in {
             v["code"] for v in re_seal["violations"]}
         # full deletion after references exist
+        force_writable_tree(frozen_dir)
         shutil.rmtree(frozen_dir)
         re_seal = freeze_candidate_dir(env["candidate"], env["frozen_root"],
                                        registry_root=env["registry_root"])
@@ -354,7 +374,7 @@ def test_canonical_vs_legacy_digest_mismatch_blocks_runtime() -> None:
             json.dumps(env["entry"], indent=2))
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "ARTIFACT_DIGEST_MISMATCH" in blocked_codes(ei.value)
 
 
@@ -363,10 +383,11 @@ def test_new_candidate_never_falls_back_to_legacy_binding() -> None:
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         env = build_env(tmp)
-        (env["artifact_dir"] / "extra.py").write_text("x=1\n")
+        os.chmod(env["snapshot"], 0o755)
+        (env["snapshot"] / "extra.py").write_text("x=1\n")
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         codes = blocked_codes(ei.value)
         assert "UNDECLARED_ARTIFACT_FILE" in codes
         assert "ARTIFACT_DIGEST_MISMATCH" not in codes

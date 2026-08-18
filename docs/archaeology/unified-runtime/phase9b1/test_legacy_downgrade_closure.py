@@ -16,6 +16,7 @@ Covers A-J from the Phase 9-B.1.1 closure spec:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -40,6 +41,7 @@ from pilot import runtime_adoption_guard as guard  # noqa: E402
 NAME = "cap-x"
 CAND_ID = "cand-9b1"
 CONFIRM = {"operator": "test", "confirm": True}
+RUNTIME_UID = 65534  # non-owner runtime identity for canonical execution
 
 
 def build_candidate(tmp_path: pathlib.Path, *, main: bytes = b"print('hi')\n",
@@ -107,6 +109,7 @@ def canonical_env(tmp_path: pathlib.Path, *, promote_entry: bool = True) -> dict
     guard.mark_promoted(registry_root, entry)
     env["entry"] = entry
     env["artifact_dir"] = pathlib.Path(entry["artifact_dir"])
+    env["snapshot"] = frozen_root / "frozen" / CAND_ID / "artifact"
     return env
 
 
@@ -127,6 +130,15 @@ def legacy_env(tmp_path: pathlib.Path) -> dict:
 
 def blocked_codes(exc: AdoptionBlocked) -> set[str]:
     return {v["code"] for v in exc.violations}
+
+
+def force_writable_tree(path: pathlib.Path) -> None:
+    if path.is_dir():
+        os.chmod(path, 0o755)
+        for p in path.rglob("*"):
+            os.chmod(p, 0o755 if p.is_dir() else 0o644)
+    else:
+        os.chmod(path, 0o644)
 
 
 def entry_path(env: dict) -> pathlib.Path:
@@ -175,7 +187,7 @@ def test_b_canonical_proof_missing_blocks() -> None:
         file_path.write_text(json.dumps(file_auth, indent=2) + "\n")
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "CANONICAL_IDENTITY_MISMATCH" in blocked_codes(ei.value)
 
 
@@ -183,10 +195,11 @@ def test_c_frozen_record_deletion_blocks() -> None:
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         env = canonical_env(tmp)
+        os.chmod(env["frozen_root"] / "frozen", 0o755)
         (env["frozen_root"] / "frozen" / f"{CAND_ID}.json").unlink()
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "MISSING_FROZEN_CANDIDATE" in blocked_codes(ei.value)
 
 
@@ -200,7 +213,7 @@ def test_d_artifact_identity_stripping_blocks() -> None:
         path.write_text(json.dumps(entry, indent=2) + "\n")
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], entry, env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "ARTIFACT_IDENTITY_MISMATCH" in blocked_codes(ei.value)
 
 
@@ -221,10 +234,11 @@ def test_f_undeclared_artifact_blocks_not_legacy() -> None:
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         env = canonical_env(tmp)
-        (env["artifact_dir"] / "extra.py").write_text("x=1\n")
+        os.chmod(env["snapshot"], 0o755)
+        (env["snapshot"] / "extra.py").write_text("x=1\n")
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "UNDECLARED_ARTIFACT_FILE" in blocked_codes(ei.value)
         path = entry_path(env)
         stripped = json.loads(path.read_text())
@@ -247,7 +261,7 @@ def test_g_digest_equality_does_not_decide_canonical() -> None:
         del entry["artifact_identity"]
         with pytest.raises(AdoptionBlocked) as ei:
             guard.adopt(env["registry_root"], entry, env["artifact_dir"],
-                        frozen_root=env["frozen_root"])
+                        frozen_root=env["frozen_root"], runtime_uid=RUNTIME_UID)
         assert "ARTIFACT_IDENTITY_MISMATCH" in blocked_codes(ei.value)
         lenv = legacy_env(tmp / "legacy")
         assert lenv["entry"]["adoption"]["artifact_digest"] == \
@@ -270,12 +284,15 @@ def test_i_production_b3_canonical_regression() -> None:
         tmp = pathlib.Path(td)
         env = canonical_env(tmp)
         report = guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                             frozen_root=env["frozen_root"])
+                             frozen_root=env["frozen_root"],
+                             runtime_uid=RUNTIME_UID)
         assert report["verdict"] == "ALLOW"
         mount = guard.verify_at_mount(
-            env["registry_root"], env["entry"], env["artifact_dir"],
-            report["artifact_digest"], frozen_root=env["frozen_root"])
+            env["registry_root"], env["entry"], env["snapshot"],
+            report["artifact_digest"], frozen_root=env["frozen_root"],
+            mount_source=env["snapshot"], runtime_uid=RUNTIME_UID)
         assert mount["verdict"] == "ALLOW"
+        assert mount["verified_artifact_dir"] == str(env["snapshot"].resolve())
         assert env["entry"]["artifact_identity"] == CANONICAL_ARTIFACT_IDENTITY_V1
         assert env["authority"]["artifact_identity"] == CANONICAL_ARTIFACT_IDENTITY_V1
 
@@ -286,13 +303,14 @@ def test_j_rejected_cases_create_no_legacy_binding() -> None:
         store_before = store_path.read_bytes()
         with pytest.raises(AdoptionBlocked):
             guard.adopt(env["registry_root"], env["entry"], env["artifact_dir"],
-                        **frozen_root_kwarg)
+                        **frozen_root_kwarg, runtime_uid=RUNTIME_UID)
         assert store_path.read_bytes() == store_before
         assert entry_path(env).exists()
 
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         env = canonical_env(tmp)
+        os.chmod(env["frozen_root"] / "frozen", 0o755)
         (env["frozen_root"] / "frozen" / f"{CAND_ID}.json").unlink()
         assert_no_writes(env, frozen_root_kwarg={"frozen_root": env["frozen_root"]})
 
@@ -316,5 +334,6 @@ def test_j_rejected_cases_create_no_legacy_binding() -> None:
 
     with tempfile.TemporaryDirectory() as td:
         env = canonical_env(pathlib.Path(td))
-        (env["artifact_dir"] / "extra.py").write_text("x=1\n")
+        os.chmod(env["snapshot"], 0o755)
+        (env["snapshot"] / "extra.py").write_text("x=1\n")
         assert_no_writes(env, frozen_root_kwarg={"frozen_root": env["frozen_root"]})

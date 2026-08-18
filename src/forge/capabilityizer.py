@@ -48,6 +48,22 @@ def file_digest(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def _chmod_tree(root: Path, dir_mode: int, file_mode: int) -> None:
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in filenames:
+            os.chmod(Path(dirpath) / name, file_mode)
+        for name in dirnames:
+            os.chmod(Path(dirpath) / name, dir_mode)
+    os.chmod(root, dir_mode)
+
+
+def _fsync_tree(root: Path) -> None:
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            with p.open("rb") as fh:
+                os.fsync(fh.fileno())
+
+
 def canonical_artifact_digest(files: dict[str, str]) -> str:
     """sha256(canonical({rel_posix_path: sha256(file_bytes)})), sorted paths."""
     return sha256_bytes(canonical_json({p: files[p] for p in sorted(files)}))
@@ -275,11 +291,30 @@ def freeze_candidate(candidate: dict, artifact_dir: Path, tests_dir: Path,
                                            "frozen record is missing; re-seal is forbidden"}]}
 
     tmp_snap = frozen_dir / f".{candidate_id}.{uuid.uuid4().hex}.tmp"
+    # Owner-writable spine only for this publish transaction; hardened back
+    # to 0555 immediately after the atomic rename (no post-publish writes).
+    store_root.chmod(0o755)
+    frozen_dir.chmod(0o755)
     tmp_snap.mkdir(parents=True)
     try:
         (tmp_snap / "candidate.json").write_text(json.dumps(candidate, indent=2) + "\n")
         shutil.copytree(tests_dir, tmp_snap / "tests")
         shutil.copytree(artifact_dir, tmp_snap / "artifact")
+        materialized = frozen_artifact_report(
+            tmp_snap / "artifact", candidate.get("artifact", {}).get("files"))
+        if not materialized["ok"]:
+            return {"ok": False, "verdict": "BLOCK", "record": None,
+                    "violations": [{"code": v.split(":")[0], "message": v}
+                                   for v in materialized["violations"]]}
+        if materialized["digest"] != art["digest"]:
+            return {"ok": False, "verdict": "BLOCK", "record": None,
+                    "violations": [{"code": "ARTIFACT_DIGEST_MISMATCH",
+                                    "message": f"materialized={materialized['digest']} "
+                                               f"expected={art['digest']}"}]}
+        if tests_digest(tmp_snap / "tests") != td:
+            return {"ok": False, "verdict": "BLOCK", "record": None,
+                    "violations": [{"code": "TESTS_DIGEST_MISMATCH",
+                                    "message": "materialized tests differ from record"}]}
         tmp_rec = frozen_dir / f".{candidate_id}.{uuid.uuid4().hex}.json.tmp"
         tmp_rec.write_text(json.dumps(record, indent=2) + "\n")
         try:
@@ -289,14 +324,21 @@ def freeze_candidate(candidate: dict, artifact_dir: Path, tests_dir: Path,
             return _conflict_result(existing, record, snap_dir)
         finally:
             tmp_rec.unlink(missing_ok=True)
+        _fsync_tree(tmp_snap)
+        _chmod_tree(tmp_snap, 0o555, 0o444)
         try:
             os.replace(tmp_snap, snap_dir)
         except OSError:
             return {"ok": False, "verdict": "FROZEN_CANDIDATE_INCOMPLETE", "record": None,
                     "violations": [{"code": "FROZEN_CANDIDATE_INCOMPLETE",
                                     "message": f"snapshot could not be committed: {snap_dir}"}]}
+        record_path.chmod(0o444)
+        frozen_dir.chmod(0o555)
+        store_root.chmod(0o555)
         return {"ok": True, "verdict": "FROZEN", "record": record, "violations": []}
     finally:
+        if tmp_snap.exists():
+            _chmod_tree(tmp_snap, 0o755, 0o644)
         shutil.rmtree(tmp_snap, ignore_errors=True)
 
 

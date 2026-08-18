@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 AUTHORITY_FIELDS = (
@@ -26,7 +29,11 @@ AUTHORITY_FIELDS = (
 )
 PROVENANCE_KEYS = ("policy", "evidence_manifest", "run_ids", "immutable_artifact_refs")
 NON_PROMOTE_VALUES = {"HOLD", "REJECTED", "REJECT", "CANARY", "PENDING"}
+REVOCABLE_STATUSES = ("REVOKED", "SUPERSEDED")
 STORE_FILENAME = "adoption_store.json"
+AUTHORITY_DIR_NAME = "authorities"
+DEFAULT_ISSUER_ID = "pilot-rehearsal"
+TRUSTED_ISSUERS_ENV = "PILOT_TRUSTED_ISSUERS"
 
 
 def authority_id_for(candidate_id: str | None, candidate_version: str | None,
@@ -52,6 +59,164 @@ def dir_digest(directory: Path) -> str:
 def load_store(registry_root: Path) -> dict | None:
     path = Path(registry_root) / STORE_FILENAME
     return json.loads(path.read_text()) if path.exists() else None
+
+
+def trusted_issuers() -> frozenset[str]:
+    raw = os.environ.get(TRUSTED_ISSUERS_ENV, "")
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def issuer_allowed(issuer_id: str | None) -> bool:
+    """Unset allowlist = legacy deterministic-binding mode (issuer UNKNOWN);
+    set allowlist = strict app-layer trust boundary."""
+    trusted = trusted_issuers()
+    return not trusted or issuer_id in trusted
+
+
+def authority_record_path(registry_root, authority_id: str) -> Path:
+    return Path(registry_root) / AUTHORITY_DIR_NAME / f"{authority_id}.json"
+
+
+def authority_events_path(registry_root, authority_id: str) -> Path:
+    return Path(registry_root) / AUTHORITY_DIR_NAME / f"{authority_id}.events.jsonl"
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_authority_record(registry_root, authority: dict) -> str | None:
+    """Write-once immutable authority ledger record (create-if-absent).
+
+    Returns None on success/idempotent repeat, or a conflict code when an
+    existing record differs. Never overwrites an existing record.
+    """
+    path = authority_record_path(registry_root, authority["authority_id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return "AUTHORITY_BINDING_MISMATCH"
+        return None if existing == authority else "AUTHORITY_BINDING_MISMATCH"
+    tmp = path.with_name(f".{authority['authority_id']}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, (json.dumps(authority, indent=2) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.link(tmp, path)  # atomic create-if-absent CAS
+    except FileExistsError:
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return "AUTHORITY_BINDING_MISMATCH"
+        return None if existing == authority else "AUTHORITY_BINDING_MISMATCH"
+    finally:
+        tmp.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
+    return None
+
+
+def load_authority_record(registry_root, authority_id: str) -> dict | None:
+    path = authority_record_path(registry_root, authority_id)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def load_authority_events(registry_root, authority_id: str) -> list[dict]:
+    path = authority_events_path(registry_root, authority_id)
+    if not path.exists():
+        return []
+    events = []
+    for line in path.read_text().splitlines():
+        if line.strip():
+            events.append(json.loads(line))
+    return events
+
+
+def append_authority_event(registry_root, event: dict) -> None:
+    path = authority_events_path(registry_root, event["authority_id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    try:
+        line = json.dumps(
+            event, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ) + "\n"
+        os.write(fd, line.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def revoke_authority(
+    registry_root,
+    authority_id: str,
+    *,
+    status: str,
+    issuer_id: str,
+    reason: str = "",
+) -> dict:
+    """Append-only REVOKED / SUPERSEDED transition; never rewrites the record."""
+    try:
+        record = load_authority_record(registry_root, authority_id)
+    except (OSError, json.JSONDecodeError):
+        return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                "code": "AUTHORITY_BINDING_MISMATCH",
+                "message": "authority record unreadable"}
+    if record is None:
+        return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                "code": "MISSING_AUTHORITY", "message": f"authority={authority_id}"}
+    if status not in REVOCABLE_STATUSES:
+        return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                "code": "INVALID_AUTHORITY_STATUS",
+                "message": f"status={status} expected=REVOKED|SUPERSEDED"}
+    if not issuer_allowed(issuer_id):
+        return {"verdict": "ADOPTION_BLOCKED", "allowed": False,
+                "code": "UNTRUSTED_ISSUER", "message": f"issuer={issuer_id}"}
+    event = {
+        "event": "authority_" + status.lower(),
+        "revocation_id": "rev-" + uuid.uuid4().hex[:12],
+        "authority_id": authority_id,
+        "candidate_id": record["candidate_id"],
+        "candidate_version": record["candidate_version"],
+        # canonical decision binding; validation matches on decision_id only
+        "decision_id": record["decision_id"],
+        # legacy mirror, same value; kept only for old readers
+        "promotion_decision_id": record["promotion_decision_id"],
+        "status": status,
+        "issuer_id": issuer_id,
+        "reason": reason,
+        "revoked_at": datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+    }
+    append_authority_event(registry_root, event)
+    # Best-effort sync into the legacy flat store; the event file is durable.
+    store = load_store(registry_root)
+    if store is not None:
+        revocations = store.setdefault("revocations", [])
+        # explicit normalization layer: legacy copies written before
+        # decision_id existed carry only promotion_decision_id
+        for old in revocations:
+            if not old.get("decision_id") and old.get("promotion_decision_id"):
+                old["decision_id"] = old["promotion_decision_id"]
+        revocations.append(event)
+        path = Path(registry_root) / STORE_FILENAME
+        tmp = path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(store, indent=2) + "\n")
+        os.replace(tmp, path)
+    return {"verdict": "REVOKED", "allowed": True,
+            "revocation_id": event["revocation_id"], "event": event}
 
 
 def _decision(store: dict, decision_id: str | None) -> dict | None:
@@ -89,6 +254,7 @@ def violations_for_authority(
     authority: dict,
     store: dict,
     actual_artifact_digest: str | None = None,
+    registry_root=None,
 ) -> list[dict]:
     violations: list[dict] = []
 
@@ -108,6 +274,32 @@ def violations_for_authority(
             "AUTHORITY_ID_MISMATCH",
             "authority_id is not the deterministic producer id for this binding",
         )
+    if authority.get("decision_id") not in (None, authority.get("promotion_decision_id")):
+        block(
+            "AUTHORITY_BINDING_MISMATCH",
+            f"decision_id={authority.get('decision_id')} "
+            f"promotion_decision_id={authority.get('promotion_decision_id')}",
+        )
+    if not issuer_allowed(authority.get("issuer_id")):
+        block("UNTRUSTED_ISSUER", f"issuer={authority.get('issuer_id')}")
+    if registry_root is not None and authority.get("authority_id"):
+        try:
+            record = load_authority_record(
+                registry_root, authority["authority_id"])
+            events = load_authority_events(
+                registry_root, authority["authority_id"])
+        except (OSError, json.JSONDecodeError):
+            block("AUTHORITY_BINDING_MISMATCH", "authority ledger unreadable")
+            record = events = None
+        if record is not None and record != authority:
+            block(
+                "AUTHORITY_BINDING_MISMATCH",
+                "immutable authority record differs from presented authority",
+            )
+        if events:
+            revoked = any(e.get("status") in REVOCABLE_STATUSES for e in events)
+            if revoked:
+                block("REVOKED_DECISION", f"authority={authority.get('authority_id')}")
     decision = _decision(store, authority.get("promotion_decision_id"))
     if decision is None:
         block("MISSING_DECISION", f"decision={authority.get('promotion_decision_id')}")
@@ -261,8 +453,10 @@ def validate(
     authority: dict,
     store: dict,
     actual_artifact_digest: str | None = None,
+    registry_root=None,
 ) -> dict:
-    violations = violations_for_authority(authority, store, actual_artifact_digest)
+    violations = violations_for_authority(
+        authority, store, actual_artifact_digest, registry_root)
     return {
         "schema": "adoption_authority_v1",
         "allowed": not violations,

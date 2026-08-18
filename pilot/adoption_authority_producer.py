@@ -17,7 +17,16 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pilot.adoption_authority import authority_id_for, dir_digest, load_store, validate
+from pilot.adoption_authority import (
+    DEFAULT_ISSUER_ID,
+    TRUSTED_ISSUERS_ENV,
+    authority_id_for,
+    dir_digest,
+    issuer_allowed,
+    load_store,
+    validate,
+    write_authority_record,
+)
 
 DEFAULT_POLICY_REF = "pilot-promotion-rule-v1"
 DEFAULT_POLICY = {
@@ -83,6 +92,8 @@ def issue_authority(
     provenance=None,
     evidence=None,
     lifecycle=None,
+    issuer_id=None,
+    issuer_type="operator",
 ) -> dict:
     """Persist decision records and issue one deterministic AdoptionAuthority.
 
@@ -101,6 +112,17 @@ def issue_authority(
         return _blocked(
             [{"code": "EVALUATION_MISSING",
               "message": "evaluation.evaluation_id required"}]
+        )
+    issuer_id = (
+        issuer_id
+        or (confirm.get("issuer_id") if isinstance(confirm, dict) else None)
+        or (confirm.get("operator") if isinstance(confirm, dict) else None)
+        or DEFAULT_ISSUER_ID
+    )
+    if not issuer_allowed(issuer_id):
+        return _blocked(
+            [{"code": "UNTRUSTED_ISSUER",
+              "message": f"issuer={issuer_id} not in {TRUSTED_ISSUERS_ENV}"}]
         )
     if decision is None and evaluation.get("verdict") != "PASS":
         return _blocked(
@@ -225,10 +247,20 @@ def issue_authority(
         "provenance": provenance,
         "issued_at": decision.get("created_at"),
         "status": "ISSUED",
+        "issuer_id": issuer_id,
+        "issuer_type": issuer_type,
+        "decision_id": decision.get("decision_id"),
     }
-    report = validate(authority, store, artifact_digest)
+    report = validate(authority, store, artifact_digest, registry_root)
     if not report["allowed"]:
         return _blocked(report["violations"])
+
+    conflict = write_authority_record(registry_root, authority)
+    if conflict:
+        return _blocked(
+            [{"code": conflict,
+              "message": "immutable authority ledger already holds a different record"}]
+        )
 
     existing_authority = next(
         (a for a in store["authorities"] if a.get("authority_id") == authority["authority_id"]),

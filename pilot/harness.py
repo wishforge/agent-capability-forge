@@ -722,6 +722,10 @@ class Harness:
                 out = run_dir / "output"
                 out.mkdir()
                 artifact_digest = adopted["artifact_digest"]
+                # P0 TOCTOU guard: fresh digest + latest revocation recheck
+                # immediately before the bind mount; any change -> blocked.
+                runtime_guard.verify_at_mount(
+                    self.registry_root, entry, artifact_dir, artifact_digest)
                 invoke = docker_launch(self.cfg["sandbox"]["image"], [
                     (artifact_dir, "/artifact", True),
                     (self._fixture(tid) / "input", "/input", True),

@@ -12,7 +12,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pilot.adoption_authority import dir_digest, load_store, validate
+from pilot.adoption_authority import (
+    authority_id_for,
+    dir_digest,
+    load_authority_record,
+    load_store,
+    validate,
+)
 
 BINDING_KEYS = (
     "candidate_id",
@@ -68,9 +74,24 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
     cand = Path(candidate_dir)
     artifact = cand / "implementation" / "artifact"
     actual_digest = dir_digest(artifact) if artifact.is_dir() else None
-    report = validate(adoption_authority, store, actual_digest)
+    report = validate(adoption_authority, store, actual_digest, registry_root)
     if not report["allowed"]:
         raise AdoptionBlocked(report["violations"])
+    if (registry_root / "authorities").is_dir():
+        aid = authority_id_for(
+            adoption_authority.get("candidate_id"),
+            adoption_authority.get("candidate_version"),
+            adoption_authority.get("promotion_decision_id"),
+        )
+        if load_authority_record(registry_root, aid) is None:
+            raise AdoptionBlocked(
+                [
+                    {
+                        "code": "UNISSUED_AUTHORITY",
+                        "message": f"no immutable ledger record for authority {aid}",
+                    }
+                ]
+            )
 
     if entry_path.exists():
         existing = json.loads(entry_path.read_text())

@@ -22,8 +22,12 @@ from pathlib import Path
 from pilot.adoption_authority import (
     AUTHORITY_FIELDS,
     PROVENANCE_KEYS,
+    REVOCABLE_STATUSES,
     authority_id_for,
     dir_digest,
+    issuer_allowed,
+    load_authority_events,
+    load_authority_record,
     load_store,
 )
 from pilot.registry import BINDING_KEYS, AdoptionBlocked
@@ -73,6 +77,7 @@ def violations_for_runtime_activation(
     authority: dict | None,
     store: dict,
     actual_artifact_digest: str | None,
+    registry_root=None,
 ) -> list[dict]:
     violations: list[dict] = []
 
@@ -101,6 +106,23 @@ def violations_for_runtime_activation(
             "AUTHORITY_ID_MISMATCH",
             "authority_id is not the deterministic producer id for this binding",
         )
+    if authority.get("decision_id") not in (None, authority.get("promotion_decision_id")):
+        block(
+            "AUTHORITY_BINDING_MISMATCH",
+            f"decision_id={authority.get('decision_id')} "
+            f"promotion_decision_id={authority.get('promotion_decision_id')}",
+        )
+    if not issuer_allowed(authority.get("issuer_id")):
+        block("UNTRUSTED_ISSUER", f"issuer={authority.get('issuer_id')}")
+    if registry_root is not None and authority.get("authority_id"):
+        try:
+            events = load_authority_events(
+                registry_root, authority["authority_id"])
+        except (OSError, json.JSONDecodeError):
+            block("AUTHORITY_BINDING_MISMATCH", "authority event log unreadable")
+            events = []
+        if any(e.get("status") in REVOCABLE_STATUSES for e in events):
+            block("REVOKED_DECISION", f"authority={authority.get('authority_id')}")
     binding_mismatch = [k for k in BINDING_KEYS if adoption.get(k) != authority.get(k)]
     if binding_mismatch:
         block("ENTRY_BINDING_MISMATCH", f"keys={','.join(binding_mismatch)}")
@@ -272,10 +294,45 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
             ]
         )
     adoption = entry.get("adoption") or {}
-    authority = _authority(store, adoption.get("promotion_decision_id"))
+    store_authority = _authority(store, adoption.get("promotion_decision_id"))
+    file_authority = None
+    aid = None
+    if (
+        adoption.get("candidate_id")
+        and adoption.get("candidate_version")
+        and adoption.get("promotion_decision_id")
+    ):
+        aid = authority_id_for(
+            adoption["candidate_id"],
+            adoption["candidate_version"],
+            adoption["promotion_decision_id"],
+        )
+        try:
+            file_authority = load_authority_record(registry_root, aid)
+        except (OSError, json.JSONDecodeError):
+            file_authority = {}
+    if file_authority == {}:
+        raise AdoptionBlocked(
+            [{"code": "AUTHORITY_BINDING_MISMATCH",
+              "message": "immutable authority record unreadable"}])
+    # Same explicit hardened-store marker as registry.promote(): the
+    # authorities/ directory is the ledger-mode signal. In hardened mode the
+    # ledger record is the authority anchor and a missing record must never
+    # fall back to the derived flat-store copy.
+    if (registry_root / "authorities").is_dir() and file_authority is None:
+        raise AdoptionBlocked(
+            [{"code": "UNISSUED_AUTHORITY",
+              "message": f"no immutable ledger record for authority {aid}"}])
+    if file_authority is not None and store_authority is not None \
+            and file_authority != store_authority:
+        raise AdoptionBlocked(
+            [{"code": "AUTHORITY_BINDING_MISMATCH",
+              "message": "immutable authority record differs from store record"}])
+    authority = file_authority if file_authority is not None else store_authority
     artifact = Path(artifact_dir)
     actual_digest = dir_digest(artifact) if artifact.is_dir() else None
-    violations = violations_for_runtime_activation(entry, authority, store, actual_digest)
+    violations = violations_for_runtime_activation(
+        entry, authority, store, actual_digest, registry_root)
     if violations:
         raise AdoptionBlocked(violations)
     return {
@@ -285,6 +342,22 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
         "authority_id": authority.get("authority_id"),
         "artifact_digest": actual_digest,
     }
+
+
+def verify_at_mount(registry_root, entry: dict, artifact_dir,
+                    expected_digest: str | None = None) -> dict:
+    """Fresh adopt() recheck immediately before docker_launch mounts.
+
+    Closes the pre-mount replacement window in the pilot B3 path: the bytes
+    that pass here are the bytes the next statement mounts (modulo the
+    OS-level bind-mount race, which remains UNKNOWN).
+    """
+    report = adopt(registry_root, entry, artifact_dir)
+    if expected_digest is not None and report["artifact_digest"] != expected_digest:
+        raise AdoptionBlocked(
+            [{"code": "ARTIFACT_DIGEST_MISMATCH",
+              "message": "artifact changed between activation check and mount"}])
+    return report
 
 
 def mark_promoted(registry_root, entry: dict) -> None:
@@ -332,4 +405,10 @@ def mark_promoted(registry_root, entry: dict) -> None:
     os.replace(tmp, path)
 
 
-__all__ = ["AdoptionBlocked", "adopt", "mark_promoted", "violations_for_runtime_activation"]
+__all__ = [
+    "AdoptionBlocked",
+    "adopt",
+    "mark_promoted",
+    "verify_at_mount",
+    "violations_for_runtime_activation",
+]

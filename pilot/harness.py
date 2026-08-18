@@ -33,7 +33,13 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "src"))
 
 from forge.sandbox import launch as docker_launch  # noqa: E402
-from forge.capabilityizer import capabilityize, CapabilityizeError, static_scan  # noqa: E402
+from forge.capabilityizer import (  # noqa: E402
+    bind_evaluation,
+    capabilityize,
+    CapabilityizeError,
+    freeze_candidate_dir,
+    static_scan,
+)
 from forge.validator import validate as validate_candidate  # noqa: E402
 from forge.evaluator import evaluate as evaluate_candidate  # noqa: E402
 import pilot.cost as cost_mod  # noqa: E402
@@ -56,7 +62,9 @@ def _file_sha256(path: Path) -> str:
     return _sha256(path.read_bytes())
 
 
-def _dir_digest(directory: Path) -> str:
+def _legacy_dir_digest(directory: Path) -> str:
+    """Legacy harness digest ({"files": {...}} wrapper). Kept only for
+    skill freeze/run-record checks; NOT artifact binding (Phase 9-B.1)."""
     files = {p.relative_to(directory).as_posix(): _file_sha256(p)
              for p in sorted(directory.rglob("*")) if p.is_file()}
     return _sha256(_canonical({"files": files}))
@@ -280,8 +288,8 @@ class Harness:
     def _skill_treatment(self, run_dir: Path, skill_dir: Path, name: str) -> dict:
         """Deterministic harness-level injection record: mounted copy + digest match."""
         mounted = run_dir / "codex_home" / "skills" / name
-        mounted_digest = _dir_digest(mounted)
-        expected_digest = _dir_digest(skill_dir)
+        mounted_digest = _legacy_dir_digest(mounted)
+        expected_digest = _legacy_dir_digest(skill_dir)
         evidence = {
             "kind": "skill_injection",
             "injected_by": "harness",
@@ -578,6 +586,12 @@ class Harness:
         except CapabilityizeError as e:
             raise RuntimeError(f"capabilityize FAIL: {e}")
         cand = Path(made["candidate_dir"])
+        frozen = freeze_candidate_dir(
+            cand, self.state / "frozen_candidates",
+            registry_root=self.registry_root)
+        if not frozen["ok"]:
+            raise RuntimeError("B3 seal FAIL: " + "; ".join(
+                v["code"] + ": " + v["message"] for v in frozen["violations"]))
         self._sandbox_phase = "validation"
         validation = validate_candidate(
             cand, self._sandbox_launch, self.oracle_script,
@@ -591,6 +605,11 @@ class Harness:
             self.state / "sandbox_out" / "evaluation",
             novel_fixtures=[("fplus-novel", self._fixture("fplus-novel"))],
             independent_fixtures=[("fplus-novel2", self._fixture("fplus-novel2"))])
+        evaluation = bind_evaluation(
+            evaluation, frozen["record"]["candidate_id"],
+            frozen["record"]["artifact_digest"], frozen["record"]["seal_digest"])
+        (cand / "evaluation.json").write_text(
+            json.dumps(evaluation, indent=2) + "\n")
         name = proposal["name"]
         if evaluation["verdict"] == "PASS":
             old_entry = self.registry_root / "F+" / f"{name}.json"
@@ -600,14 +619,16 @@ class Harness:
                 if old_artifact:
                     shutil.rmtree(old_artifact, ignore_errors=True)
             issued = producer.issue_authority(
-                self.registry_root, cand, evaluation, confirm=confirm)
+                self.registry_root, cand, evaluation, confirm=confirm,
+                frozen_root=self.state / "frozen_candidates")
             if issued["verdict"] != "AUTHORITY_ISSUED":
                 raise RuntimeError(
                     "B3 authority issuance BLOCKED: "
                     + json.dumps(issued["violations"], ensure_ascii=False))
             entry = registry.promote(
                 "F+", name, cand, evaluation, self.registry_root,
-                adoption_authority=issued["authority"])
+                adoption_authority=issued["authority"],
+                frozen_root=self.state / "frozen_candidates")
             runtime_guard.mark_promoted(self.registry_root, entry)
             (self.state / "b3_entry.json").write_text(
                 json.dumps({"name": name, "capability_id": entry["capability_id"]}, indent=2) + "\n")
@@ -639,7 +660,7 @@ class Harness:
             shutil.rmtree(frozen)
         shutil.copytree(src, frozen)
         skill_ref = {
-            "name": name, "path": str(frozen), "digest": _dir_digest(frozen),
+            "name": name, "path": str(frozen), "digest": _legacy_dir_digest(frozen),
             "frozen_at": _now(), "human_minutes": cfg["human_minutes"],
         }
         (self.state / "b1_skill_ref.json").write_text(json.dumps(skill_ref, indent=2) + "\n")

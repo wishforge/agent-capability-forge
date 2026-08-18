@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ from pilot.adoption_authority import (
     DEFAULT_ISSUER_ID,
     TRUSTED_ISSUERS_ENV,
     authority_id_for,
-    dir_digest,
+    dir_digest as legacy_dir_digest,
     integrity_anchor_violations,
     issuer_allowed,
     load_store,
@@ -29,6 +30,17 @@ from pilot.adoption_authority import (
     validate,
     write_authority_record,
     write_trust_anchor,
+)
+ROOT = Path(__file__).resolve().parent
+REPO = ROOT.parent
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
+
+from forge.capabilityizer import (  # noqa: E402
+    CANONICAL_ARTIFACT_IDENTITY_V1,
+    evaluation_binding_violations,
+    frozen_checks,
+    live_candidate_violations,
 )
 
 DEFAULT_POLICY_REF = "pilot-promotion-rule-v1"
@@ -88,6 +100,7 @@ def issue_authority(
     candidate_dir,
     evaluation,
     *,
+    frozen_root=None,
     confirm=None,
     policy=None,
     decision=None,
@@ -135,12 +148,38 @@ def issue_authority(
 
     try:
         candidate_meta = json.loads((cand / "candidate.json").read_text())
-        manifest = json.loads((cand / "manifest.json").read_text())
         candidate_id = candidate_meta["candidate_id"]
-        candidate_version = f"v{manifest['capability']['version']}"
-        candidate_created_at = manifest["provenance"]["forge_timestamp"]
-        artifact_dir = cand / "implementation" / "artifact"
-        artifact_digest = dir_digest(artifact_dir) if artifact_dir.is_dir() else None
+        if frozen_root is None and (candidate_meta.get("source_bundle_ids") or []):
+            return _blocked(
+                [{"code": "CANONICAL_CANDIDATE_REQUIRES_FROZEN_ROOT",
+                  "message": "new capabilityize candidate requires frozen_root at issue"}])
+        seal_digest = None
+        if frozen_root is None:
+            # Legacy Phase 8 path: live candidate dir + legacy dir_digest.
+            manifest = json.loads((cand / "manifest.json").read_text())
+            candidate_version = f"v{manifest['capability']['version']}"
+            candidate_created_at = manifest["provenance"]["forge_timestamp"]
+            artifact_dir = cand / "implementation" / "artifact"
+            artifact_digest = (
+                legacy_dir_digest(artifact_dir) if artifact_dir.is_dir() else None)
+        else:
+            # New Frozen Candidate path: canonical identity only, no legacy
+            # fallback when the caller opted into frozen_root.
+            frozen = frozen_checks(frozen_root, candidate_id)
+            if not frozen["ok"]:
+                return _blocked(frozen["violations"])
+            violations = evaluation_binding_violations(evaluation, frozen["record"])
+            violations += live_candidate_violations(
+                frozen["record"], frozen["candidate"], cand)
+            if violations:
+                return _blocked(violations)
+            manifest = frozen["candidate"].get("manifest") or {}
+            candidate_version = f"v{frozen['candidate'].get('version')}"
+            candidate_created_at = (
+                frozen["candidate"].get("provenance") or {}).get("created_at")
+            artifact_dir = cand / "implementation" / "artifact"
+            artifact_digest = frozen["record"]["artifact_digest"]
+            seal_digest = frozen["record"]["seal_digest"]
     except Exception as exc:  # noqa: BLE001 - fail-closed on any bad candidate
         return _blocked(
             [{"code": "CANDIDATE_METADATA_MISSING", "message": str(exc)}]
@@ -259,6 +298,9 @@ def issue_authority(
         "issuer_type": issuer_type,
         "decision_id": decision.get("decision_id"),
     }
+    if seal_digest is not None:
+        authority["artifact_identity"] = CANONICAL_ARTIFACT_IDENTITY_V1
+        authority["seal_digest"] = seal_digest
     report = validate(authority, store, artifact_digest, registry_root)
     if not report["allowed"]:
         return _blocked(report["violations"])

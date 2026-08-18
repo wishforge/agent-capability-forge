@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,12 +16,23 @@ from pathlib import Path
 from pilot.adoption_authority import (
     HARDENED_MODE,
     authority_id_for,
-    dir_digest,
+    dir_digest as legacy_dir_digest,
     integrity_anchor_violations,
     load_authority_record,
     load_store,
     store_integrity_mode,
     validate,
+)
+ROOT = Path(__file__).resolve().parent
+REPO = ROOT.parent
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
+
+from forge.capabilityizer import (  # noqa: E402
+    CANONICAL_ARTIFACT_IDENTITY_V1,
+    evaluation_binding_violations,
+    frozen_checks,
+    live_candidate_violations,
 )
 
 BINDING_KEYS = (
@@ -55,7 +67,8 @@ def _same_binding(entry: dict, authority: dict) -> bool:
 
 
 def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
-            registry_root: Path, *, adoption_authority: dict | None = None) -> dict:
+            registry_root: Path, *, adoption_authority: dict | None = None,
+            frozen_root=None) -> dict:
     registry_root = Path(registry_root)
     entry_path = registry_root / family / f"{name}.json"
 
@@ -79,7 +92,50 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
 
     cand = Path(candidate_dir)
     artifact = cand / "implementation" / "artifact"
-    actual_digest = dir_digest(artifact) if artifact.is_dir() else None
+    canonical_identity = adoption_authority.get("artifact_identity")
+    if canonical_identity == CANONICAL_ARTIFACT_IDENTITY_V1:
+        if frozen_root is None:
+            raise AdoptionBlocked(
+                [{"code": "CANONICAL_CANDIDATE_REQUIRES_FROZEN_ROOT",
+                  "message": "canonical authority requires frozen_root at promote"}])
+        if not adoption_authority.get("seal_digest"):
+            raise AdoptionBlocked(
+                [{"code": "CANONICAL_IDENTITY_MISSING",
+                  "message": "canonical authority missing seal_digest"}])
+    elif frozen_root is not None:
+        raise AdoptionBlocked(
+            [{"code": "ARTIFACT_IDENTITY_MISMATCH",
+              "message": "frozen_root supplied for legacy authority"}])
+    elif frozen_root is None:
+        try:
+            cand_meta = json.loads((cand / "candidate.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            cand_meta = {}
+        if cand_meta.get("source_bundle_ids"):
+            raise AdoptionBlocked(
+                [{"code": "CANONICAL_CANDIDATE_REQUIRES_FROZEN_ROOT",
+                  "message": "new capabilityize candidate requires frozen_root at promote"}])
+    artifact_identity = canonical_identity
+    if frozen_root is not None:
+        # New Frozen Candidate path: verify frozen + evaluation binding +
+        # live exact layout before any store/registry write.
+        frozen = frozen_checks(frozen_root, adoption_authority.get("candidate_id"))
+        if not frozen["ok"]:
+            raise AdoptionBlocked(frozen["violations"])
+        if adoption_authority.get("seal_digest") != frozen["record"]["seal_digest"]:
+            raise AdoptionBlocked(
+                [{"code": "CANONICAL_IDENTITY_MISMATCH",
+                  "message": "authority seal_digest differs from frozen candidate"}])
+        violations = evaluation_binding_violations(evaluation, frozen["record"])
+        violations += live_candidate_violations(
+            frozen["record"], frozen["candidate"], cand)
+        if violations:
+            raise AdoptionBlocked(violations)
+        actual_digest = frozen["record"]["artifact_digest"]
+        frozen_root = str(Path(frozen_root))
+    else:
+        # Legacy Phase 8 path: historical artifacts keep legacy semantics.
+        actual_digest = legacy_dir_digest(artifact) if artifact.is_dir() else None
     report = validate(adoption_authority, store, actual_digest, registry_root)
     if not report["allowed"]:
         raise AdoptionBlocked(report["violations"])
@@ -134,6 +190,8 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
         "version": 1,
         "family": family,
         "artifact_dir": str(artifact_dst),
+        "artifact_identity": artifact_identity,
+        "frozen_root": frozen_root if artifact_identity else None,
         "manifest": manifest,
         "evaluation": evaluation,
         "state": "promoted",

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from pilot.adoption_authority import (
     PROVENANCE_KEYS,
     REVOCABLE_STATUSES,
     authority_id_for,
-    dir_digest,
+    dir_digest as legacy_dir_digest,
     integrity_anchor_violations,
     issuer_allowed,
     load_authority_events,
@@ -36,6 +37,17 @@ from pilot.adoption_authority import (
     write_trust_anchor,
 )
 from pilot.registry import BINDING_KEYS, AdoptionBlocked
+ROOT = Path(__file__).resolve().parent
+REPO = ROOT.parent
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
+
+from forge.capabilityizer import (  # noqa: E402
+    CANONICAL_ARTIFACT_IDENTITY_V1,
+    evaluation_binding_violations,
+    frozen_artifact_violations,
+    frozen_checks,
+)
 
 
 def _decision(store: dict, decision_id: str | None) -> dict | None:
@@ -282,7 +294,7 @@ def violations_for_runtime_activation(
     return violations
 
 
-def adopt(registry_root, entry: dict, artifact_dir) -> dict:
+def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict:
     """Validate before the pilot B3 runtime activates/executes an artifact.
 
     Fail-closed: any missing/mismatch raises AdoptionBlocked
@@ -303,6 +315,8 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
     if anchor_violations:
         raise AdoptionBlocked(anchor_violations)
     adoption = entry.get("adoption") or {}
+    if frozen_root is None:
+        frozen_root = entry.get("frozen_root")
     store_authority = _authority(store, adoption.get("promotion_decision_id"))
     file_authority = None
     aid = None
@@ -342,7 +356,49 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
               "message": "immutable authority record differs from store record"}])
     authority = file_authority if file_authority is not None else store_authority
     artifact = Path(artifact_dir)
-    actual_digest = dir_digest(artifact) if artifact.is_dir() else None
+    is_canonical = (
+        authority is not None
+        and authority.get("artifact_identity") == CANONICAL_ARTIFACT_IDENTITY_V1
+    )
+    entry_identity = entry.get("artifact_identity")
+    if authority is not None and is_canonical:
+        if entry_identity != CANONICAL_ARTIFACT_IDENTITY_V1:
+            raise AdoptionBlocked(
+                [{"code": "ARTIFACT_IDENTITY_MISMATCH",
+                  "message": "canonical authority requires canonical registry entry"}])
+        if frozen_root is None:
+            raise AdoptionBlocked(
+                [{"code": "MISSING_FROZEN_CANDIDATE",
+                  "message": "canonical registry entry requires frozen_root"}])
+    elif authority is not None and (
+        entry_identity == CANONICAL_ARTIFACT_IDENTITY_V1 or frozen_root is not None
+    ):
+        raise AdoptionBlocked(
+            [{"code": "ARTIFACT_IDENTITY_MISMATCH",
+              "message": "registry entry claims canonical but authority is legacy"}])
+    if is_canonical:
+        # New Frozen Candidate path (explicit marker; no legacy fallback):
+        # frozen record -> evaluation binding -> canonical digest + exact
+        # layout, all before the existing runtime guard.
+        frozen = frozen_checks(frozen_root, adoption.get("candidate_id"))
+        if not frozen["ok"]:
+            raise AdoptionBlocked(frozen["violations"])
+        if authority.get("seal_digest") != frozen["record"]["seal_digest"]:
+            raise AdoptionBlocked(
+                [{"code": "CANONICAL_IDENTITY_MISMATCH",
+                  "message": "authority seal_digest differs from frozen candidate"}])
+        eval_violations = evaluation_binding_violations(
+            entry.get("evaluation") or {}, frozen["record"])
+        if eval_violations:
+            raise AdoptionBlocked(eval_violations)
+        art_violations = frozen_artifact_violations(
+            frozen["record"], frozen["candidate"], artifact)
+        if art_violations:
+            raise AdoptionBlocked(art_violations)
+        actual_digest = frozen["record"]["artifact_digest"]
+    else:
+        # Legacy Phase 8 path: historical artifacts keep legacy semantics.
+        actual_digest = legacy_dir_digest(artifact) if artifact.is_dir() else None
     violations = violations_for_runtime_activation(
         entry, authority, store, actual_digest, registry_root)
     if violations:
@@ -357,14 +413,15 @@ def adopt(registry_root, entry: dict, artifact_dir) -> dict:
 
 
 def verify_at_mount(registry_root, entry: dict, artifact_dir,
-                    expected_digest: str | None = None) -> dict:
+                    expected_digest: str | None = None,
+                    *, frozen_root=None) -> dict:
     """Fresh adopt() recheck immediately before docker_launch mounts.
 
     Closes the pre-mount replacement window in the pilot B3 path: the bytes
     that pass here are the bytes the next statement mounts (modulo the
     OS-level bind-mount race, which remains UNKNOWN).
     """
-    report = adopt(registry_root, entry, artifact_dir)
+    report = adopt(registry_root, entry, artifact_dir, frozen_root=frozen_root)
     if expected_digest is not None and report["artifact_digest"] != expected_digest:
         raise AdoptionBlocked(
             [{"code": "ARTIFACT_DIGEST_MISMATCH",

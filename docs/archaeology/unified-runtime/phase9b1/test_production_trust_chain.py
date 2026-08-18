@@ -291,7 +291,14 @@ def test_phase_future_b3_reads_frozen_candidate_and_blocks(tmp_path, monkeypatch
     calls = []
     monkeypatch.setattr(harness_mod, "docker_launch", lambda *a, **k: calls.append(a) or {})
     (h.state / "b3_entry.json").write_text(json.dumps(
-        {"name": NAME, "capability_id": env["entry"]["capability_id"]}))
+        {
+            "name": NAME,
+            "capability_id": env["entry"]["capability_id"],
+            "candidate_id": env["entry"]["adoption"]["candidate_id"],
+            "candidate_version": env["entry"]["adoption"]["candidate_version"],
+            "artifact_digest": env["entry"]["adoption"]["artifact_digest"],
+            "seal_digest": env["authority"]["seal_digest"],
+        }))
     with pytest.raises(AdoptionBlocked) as ei:
         h.phase_future("b3")
     assert "MISSING_FROZEN_CANDIDATE" in blocked_codes(ei.value)

@@ -695,11 +695,27 @@ class Harness:
             skill_dir = Path(skill_ref["path"])
             name = skill_ref["name"]
         elif arm == "b3":
-            entry_meta = json.loads((self.state / "b3_entry.json").read_text())
-            entry = registry.discover(self.registry_root, "F+", entry_meta["name"])
-            if entry is None:
-                raise RuntimeError("no promoted capability for B3 future runs")
-            name = entry["name"]
+            run_request = runtime_guard.load_trusted_run_request(self.registry_root)
+            b3_cache_path = self.state / "b3_entry.json"
+            if run_request is not None:
+                entry_meta = runtime_guard.resolve_b3_cache(b3_cache_path, run_request)
+                entry = registry.discover(self.registry_root, "F+", run_request["name"])
+                if entry is None:
+                    raise RuntimeError("no promoted capability for B3 future runs")
+                name = run_request["name"]
+            else:
+                if not b3_cache_path.exists():
+                    raise RuntimeError("no b3_entry.json and no anchored run_request")
+                entry_meta = json.loads(b3_cache_path.read_text())
+                entry = registry.discover(self.registry_root, "F+", entry_meta["name"])
+                if entry is None:
+                    raise RuntimeError("no promoted capability for B3 future runs")
+                if entry.get("artifact_identity") == CANONICAL_ARTIFACT_IDENTITY_V1:
+                    raise registry.AdoptionBlocked(
+                        [{"code": "MISSING_RUN_REQUEST",
+                          "message": "canonical candidate requires anchored "
+                                     "adoption_store run_request"}])
+                name = entry["name"]
         else:
             raise RuntimeError(f"unknown arm {arm}")
         for task in self.family["future_tasks"]:
@@ -761,9 +777,10 @@ class Harness:
                 # expected identity and fail closed on old-format requests.
                 mount = runtime_guard.verify_at_mount(
                     self.registry_root, entry, artifact_dir,
-                    expected_digest=entry_meta.get("artifact_digest"),
-                    expected_identity=entry_meta if entry.get("artifact_identity")
-                    == CANONICAL_ARTIFACT_IDENTITY_V1 else None,
+                    expected_digest=(
+                        run_request["artifact_digest"]
+                        if run_request is not None else entry_meta.get("artifact_digest")),
+                    expected_identity=run_request,
                     mount_source=artifact_dir)
                 artifact_dir = Path(mount["verified_artifact_dir"])
                 invoke = docker_launch(self.cfg["sandbox"]["image"], [

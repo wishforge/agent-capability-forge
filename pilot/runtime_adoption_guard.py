@@ -56,6 +56,9 @@ IDENTITY_MISMATCH_CODES = {
     "artifact_digest": "ARTIFACT_DIGEST_MISMATCH",
     "seal_digest": "SEAL_DIGEST_MISMATCH",
 }
+CACHE_IDENTITY_FIELDS = (
+    "name", "candidate_id", "candidate_version", "artifact_digest", "seal_digest")
+CACHE_FIELDS = ("name", "capability_id") + IDENTITY_FIELDS
 
 
 def _decision(store: dict, decision_id: str | None) -> dict | None:
@@ -323,6 +326,93 @@ def identity_violations(expected: dict, actual: dict) -> list[dict]:
     return violations
 
 
+def _run_request(entry: dict, authority: dict) -> dict:
+    """Anchored Run Intent record: identity + promotion binding + locators."""
+    return {
+        "name": entry.get("name"),
+        "capability_id": entry.get("capability_id"),
+        "candidate_id": authority.get("candidate_id"),
+        "candidate_version": authority.get("candidate_version"),
+        "artifact_digest": authority.get("artifact_digest"),
+        "seal_digest": authority.get("seal_digest"),
+        "promotion_decision_id": authority.get("promotion_decision_id"),
+        "created_at": authority.get("issued_at") or "",
+    }
+
+
+def load_trusted_run_request(registry_root) -> dict | None:
+    """Read adoption_store["run_request"] after anchor verification.
+
+    None means the store is legacy (no anchored intent); canonical entries
+    must not infer an intent from b3_entry/registry (MISSING_RUN_REQUEST).
+    """
+    registry_root = Path(registry_root)
+    store = load_store(registry_root)
+    if store is None:
+        return None  # legacy fixture: no adoption store, no anchored intent
+    anchor_violations = integrity_anchor_violations(store, registry_root)
+    if anchor_violations:
+        raise AdoptionBlocked(anchor_violations)
+    run_request = store.get("run_request")
+    if run_request is None:
+        return None
+    if not isinstance(run_request, dict):
+        raise AdoptionBlocked(
+            [{"code": "MISSING_RUN_REQUEST",
+              "message": "adoption_store run_request is not an object"}])
+    if not run_request.get("name"):
+        raise AdoptionBlocked(
+            [{"code": "MISSING_RUN_REQUEST",
+              "message": "run_request missing name"}])
+    missing = [f for f in IDENTITY_FIELDS if run_request.get(f) in (None, "")]
+    if missing:
+        raise AdoptionBlocked(
+            [{"code": "MISSING_IDENTITY",
+              "message": f"run_request missing {','.join(missing)}"}])
+    return run_request
+
+
+def derived_b3_entry(run_request: dict) -> dict:
+    """Cache snapshot derived from the anchored Run Intent."""
+    return {f: run_request.get(f) for f in CACHE_FIELDS}
+
+
+def run_request_cache_violations(run_request: dict, cache) -> list[dict]:
+    """b3_entry identity/locator must equal the anchored Run Intent."""
+    if not isinstance(cache, dict):
+        return [{"code": "RUN_REQUEST_CACHE_MISMATCH",
+                 "message": "b3_entry is not an object"}]
+    return [
+        {"code": "RUN_REQUEST_CACHE_MISMATCH",
+         "message": f"b3_entry {field} mismatch: "
+                    f"cache={cache.get(field)!r} run_request={run_request.get(field)!r}"}
+        for field in CACHE_IDENTITY_FIELDS
+        if run_request.get(field) != cache.get(field)
+    ]
+
+
+def resolve_b3_cache(cache_path, run_request: dict) -> dict:
+    """Cache semantics: missing -> rebuild; present -> must equal intent.
+
+    Rebuild writes the derived snapshot and re-reads it, so a tampered
+    rebuild is still validated before use (never a second intent choice).
+    """
+    cache_path = Path(cache_path)
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(derived_b3_entry(run_request), indent=2) + "\n")
+    try:
+        cache = json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        raise AdoptionBlocked(
+            [{"code": "RUN_REQUEST_CACHE_MISMATCH",
+              "message": "b3_entry unreadable"}]) from None
+    violations = run_request_cache_violations(run_request, cache)
+    if violations:
+        raise AdoptionBlocked(violations)
+    return cache
+
+
 def adopt(registry_root, entry: dict, artifact_dir, *, frozen_root=None) -> dict:
     """Validate before the pilot B3 runtime activates/executes an artifact.
 
@@ -474,11 +564,12 @@ def verify_at_mount(registry_root, entry: dict, artifact_dir,
 
 
 def mark_promoted(registry_root, entry: dict) -> None:
-    """Transition store lifecycle PROMOTABLE -> PROMOTED after promote().
+    """Transition lifecycle PROMOTABLE -> PROMOTED and record the anchored
+    Run Intent (canonical entries only) after promote().
 
     registry.promote() (Phase 8 artifact) writes state="promoted" but cannot
     touch adoption_store lifecycle; this is the pilot runtime's adoption
-    wiring and is idempotent (already PROMOTED -> no write).
+    wiring and is idempotent (no store byte change when already consistent).
     """
     registry_root = Path(registry_root)
     store = load_store(registry_root)
@@ -504,17 +595,28 @@ def mark_promoted(registry_root, entry: dict) -> None:
         raise AdoptionBlocked(
             [{"code": "MISSING_LIFECYCLE", "message": f"candidate={adoption.get('candidate_id')}"}]
         )
-    if lifecycle.get("status") == "PROMOTED":
-        return
-    ok = lifecycle.get("status") == "PROMOTABLE" and any(
-        t.get("from") == "PROMOTABLE" and t.get("to") == "PROMOTED"
-        for t in (lifecycle.get("transitions", []) or [])
-    )
-    if not ok:
-        raise AdoptionBlocked(
-            [{"code": "INVALID_LIFECYCLE", "message": f"actual={lifecycle.get('status')}"}]
+    changed = False
+    if lifecycle.get("status") != "PROMOTED":
+        ok = lifecycle.get("status") == "PROMOTABLE" and any(
+            t.get("from") == "PROMOTABLE" and t.get("to") == "PROMOTED"
+            for t in (lifecycle.get("transitions", []) or [])
         )
-    lifecycle["status"] = "PROMOTED"
+        if not ok:
+            raise AdoptionBlocked(
+                [{"code": "INVALID_LIFECYCLE",
+                  "message": f"actual={lifecycle.get('status')}"}]
+            )
+        lifecycle["status"] = "PROMOTED"
+        changed = True
+    authority = _authority(store, adoption.get("promotion_decision_id"))
+    if (authority is not None
+            and authority.get("artifact_identity") == CANONICAL_ARTIFACT_IDENTITY_V1):
+        run_request = _run_request(entry, authority)
+        if store.get("run_request") != run_request:
+            store["run_request"] = run_request
+            changed = True
+    if not changed:
+        return
     path = registry_root / "adoption_store.json"
     tmp = path.with_name(f".adoption_store.{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(store, indent=2) + "\n")
@@ -529,8 +631,12 @@ def mark_promoted(registry_root, entry: dict) -> None:
 __all__ = [
     "AdoptionBlocked",
     "adopt",
+    "derived_b3_entry",
     "identity_violations",
+    "load_trusted_run_request",
     "mark_promoted",
+    "resolve_b3_cache",
+    "run_request_cache_violations",
     "verify_at_mount",
     "violations_for_runtime_activation",
 ]

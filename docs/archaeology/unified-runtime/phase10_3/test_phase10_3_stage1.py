@@ -5,7 +5,7 @@ Contract under test (docs/architecture/managed-agent-runtime-v1.md + Phase 10.3)
   A: desired RUNNING + observed STOPPED  -> START -> RUNNING
   B: desired STOPPED + observed RUNNING  -> STOP -> STOPPED (idempotent)
   C: reconcile(RUNNING) x3               -> one active instance
-  D: desired v17 + observed v16          -> VERSION_DRIFT (no auto upgrade)
+  D: desired v17 + observed v16          -> VERSION_DRIFT / auto-upgrade
   E: version snapshot mismatch           -> REJECT
   F: revoke                              -> new start REJECT, existing -> REVOKED
   G: start failure                       -> FAILED; bounded retry; exhausted -> ESCALATE

@@ -7,9 +7,12 @@ Single source of truth per object (JSONL, latest event wins):
   instances.jsonl    RuntimeInstance observed-state events
 
 run_record stays historical evidence; RuntimeInstance may reference run_id.
-Stage 1 implements READY/STARTING/RUNNING/STOPPING/STOPPED/FAILED/REVOKED;
-DEPLOYING/PENDING/UNKNOWN stay contract only. Upgrade/rollback auto-reconcile
-is deferred; VERSION_DRIFT is detected and reported, never auto-fixed.
+Stage 1+2 implements READY/STARTING/RUNNING/STOPPING/STOPPED/FAILED/REVOKED;
+DEPLOYING/PENDING/UNKNOWN stay contract only. Version drift is reconciled
+automatically when the target immutable version is valid and the previous
+runtime instance has been confirmed STOPPED. A FAILED old instance yields
+RECONCILE_REQUIRED and the target version must not start until that instance
+is confirmed STOPPED (at most one running instance per deployment).
 """
 
 from __future__ import annotations
@@ -308,15 +311,9 @@ def get_runtime_instances(state_root, deployment_id: str | None = None) -> list[
 list_runtime_instances = get_runtime_instances
 
 
-def _active_instance(state_root: Path, deployment_id: str,
-                     version_id: str | None = None) -> dict | None:
+def _active_instance(state_root: Path, deployment_id: str) -> dict | None:
     for inst in reversed(get_runtime_instances(state_root, deployment_id)):
         if inst["observed_state"] in ACTIVE_STATES:
-            # A failed instance of an old version is not retryable for the
-            # desired version; a new instance must start instead.
-            if version_id is not None and inst["observed_state"] == "FAILED" \
-                    and inst["version_id"] != version_id:
-                continue
             return inst
     return None
 
@@ -421,19 +418,20 @@ def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
         if active is not None and active["version_id"] != dep["version_id"]:
             old = active
             if old["observed_state"] in ("RUNNING", "READY", "STARTING"):
-                stopped, ok = _stop(state_root, old, runtime)
+                old, ok = _stop(state_root, old, runtime)
                 if not ok:
-                    return _report(state_root, dep, "STOP", "FAILED",
-                                   instance=stopped,
+                    return _report(state_root, dep, "STOP", "RECONCILE_REQUIRED",
+                                   instance=old,
                                    reason=f"stop {old['version_id']} before switch failed")
             elif old["observed_state"] == "STOPPING":
                 return _report(state_root, dep, "VERSION_DRIFT",
                                "RECONCILE_REQUIRED", version_drift=True,
                                instance=old,
                                reason=f"old version {old['version_id']} stopping")
-            elif old["observed_state"] != "FAILED":
-                return _report(state_root, dep, "NO-OP", "RECONCILE_REQUIRED",
-                               instance=old)
+            if old["observed_state"] != "STOPPED":
+                return _report(state_root, dep, "RECONCILE_REQUIRED",
+                               "RECONCILE_REQUIRED", instance=old,
+                               reason=f"old version {old['version_id']} not confirmed STOPPED")
             instance, ok = _start(state_root, dep, version, runtime)
             return _report(state_root, dep, "UPGRADE",
                            "HEALTHY" if ok else "FAILED", instance=instance,

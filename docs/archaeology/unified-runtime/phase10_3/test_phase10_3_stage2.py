@@ -1,4 +1,10 @@
-"""Phase 10.3 Stage 2 RED tests: Upgrade / Rollback / Revoke lifecycle.
+"""Phase 10.3 Stage 2 tests: Managed Agent Version Lifecycle State Machine
+(Upgrade / Rollback / Revoke).
+
+These tests validate state-machine semantics only. Versions are seeded
+directly (seed_version) because the production multi-version publish path
+(create_version -> registry.promote -> authority -> anchored run_request)
+is MIGRATION_REQUIRED; passing here is not a production-live upgrade proof.
 
 Contract under test (managed-agent-runtime-v1.md §11-13, §18-19):
   U1: v1 RUNNING -> upgrade v2 -> v2 RUNNING, old STOPPED, new bound to E(D2)
@@ -41,6 +47,7 @@ from pilot.managed_runtime import (  # noqa: E402
     rollback,
     set_desired_state,
     upgrade,
+    _stop,
 )
 from test_phase10_3_stage1 import (  # noqa: E402
     FakeRuntime,
@@ -352,6 +359,85 @@ def test_upgrade_failure_keeps_desired_target_and_observed_failed(tmp_path):
     assert retry["verdict"] == "HEALTHY"
     status = get_runtime_status(env["state_root"], instances[1]["instance_id"])
     assert status["observed_state"] == "RUNNING"
+
+
+def test_failed_stop_blocks_upgrade(tmp_path):
+    env, v1, dep, rt, old = _running_v1(tmp_path)
+    v2 = seed_version(env)
+    rt.stop_result = "FAILED"
+    report = upgrade(env["state_root"], dep["deployment_id"],
+                     v2["version_id"], runtime=rt)
+    assert report["verdict"] == "RECONCILE_REQUIRED"
+    assert get_deployment(env["state_root"], dep["deployment_id"])[
+        "version_id"] == v2["version_id"]
+    instances = get_runtime_instances(env["state_root"], dep["deployment_id"])
+    assert len(instances) == 1
+    assert instances[0]["instance_id"] == old["instance_id"]
+    assert instances[0]["version_id"] == v1["version_id"]
+    assert instances[0]["observed_state"] == "FAILED"
+    assert rt.starts == [old["instance_id"]]  # v2 not started
+    assert len([i for i in instances if i["observed_state"] == "RUNNING"]) == 0
+
+
+def test_next_reconcile_after_failed_stop_blocks_again(tmp_path):
+    env, v1, dep, rt, old = _running_v1(tmp_path)
+    v2 = seed_version(env)
+    rt.stop_result = "FAILED"
+    first = upgrade(env["state_root"], dep["deployment_id"],
+                    v2["version_id"], runtime=rt)
+    assert first["verdict"] == "RECONCILE_REQUIRED"
+    rt.stop_result = "STOPPED"
+    second = reconcile(env["state_root"], dep["deployment_id"], runtime=rt)
+    assert second["verdict"] == "RECONCILE_REQUIRED"
+    instances = get_runtime_instances(env["state_root"], dep["deployment_id"])
+    assert len(instances) == 1
+    assert instances[0]["observed_state"] == "FAILED"
+    assert instances[0]["version_id"] == v1["version_id"]
+    assert rt.starts == [old["instance_id"]]  # v2 not started
+    assert rt.stops == [old["instance_id"]]  # stop not retried by reconcile
+
+
+def test_confirmed_stopped_allows_target_start(tmp_path):
+    env, v1, dep, rt, _old = _running_v1(tmp_path)
+    v2 = seed_version(env)
+    rt.stop_result = "FAILED"
+    upgrade(env["state_root"], dep["deployment_id"],
+            v2["version_id"], runtime=rt)
+    failed = get_runtime_instances(env["state_root"], dep["deployment_id"])[-1]
+    assert failed["observed_state"] == "FAILED"
+    rt.stop_result = "STOPPED"
+    stopped, ok = _stop(env["state_root"], failed, rt)
+    assert ok
+    assert stopped["observed_state"] == "STOPPED"
+    report = reconcile(env["state_root"], dep["deployment_id"], runtime=rt)
+    assert report["verdict"] == "HEALTHY"
+    instances = get_runtime_instances(env["state_root"], dep["deployment_id"])
+    assert instances[0]["observed_state"] == "STOPPED"
+    assert instances[0]["version_id"] == v1["version_id"]
+    assert instances[-1]["version_id"] == v2["version_id"]
+    assert instances[-1]["observed_state"] == "RUNNING"
+    assert len([i for i in instances if i["observed_state"] == "RUNNING"]) == 1
+
+
+def test_at_most_one_running_instance_through_failed_stop(tmp_path):
+    env, v1, dep, rt, old = _running_v1(tmp_path)
+    v2 = seed_version(env)
+    rt.stop_result = "FAILED"
+    for _ in range(2):
+        upgrade(env["state_root"], dep["deployment_id"],
+                v2["version_id"], runtime=rt)
+        reconcile(env["state_root"], dep["deployment_id"], runtime=rt)
+        instances = get_runtime_instances(env["state_root"], dep["deployment_id"])
+        assert len([i for i in instances if i["observed_state"] == "RUNNING"]) <= 1
+    failed = get_runtime_instances(env["state_root"], dep["deployment_id"])[-1]
+    assert failed["observed_state"] == "FAILED"
+    rt.stop_result = "STOPPED"
+    _stop(env["state_root"], failed, rt)
+    report = reconcile(env["state_root"], dep["deployment_id"], runtime=rt)
+    assert report["verdict"] == "HEALTHY"
+    instances = get_runtime_instances(env["state_root"], dep["deployment_id"])
+    assert len([i for i in instances if i["observed_state"] == "RUNNING"]) == 1
+    assert rt.starts == [old["instance_id"], instances[-1]["instance_id"]]
 
 
 def test_upgrade_rollback_preserve_version_immutability(tmp_path):

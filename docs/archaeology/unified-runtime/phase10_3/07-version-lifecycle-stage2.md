@@ -3,15 +3,15 @@
 - 阶段：Phase 10.3 Stage 2（Managed Agent Version Lifecycle）
 - 日期：2026-08-19
 - 基线：`main == origin/main == daafa4d`（Phase 10.3 Stage 1 已 commit/push）
-- 方法：RED（18 个新测试先失败）→ minimal implementation → GREEN →
-  Phase 9 regression → 全量 suite → scope audit
+- 方法：RED（22 个测试：18 个新测试 + 4 个 review-fix 回归测试）→ minimal
+  implementation → GREEN → Phase 9 regression → 全量 suite → scope audit
 
 ## 交付物
 
 | 文件 | 角色 |
 |---|---|
 | `pilot/managed_runtime.py` | `upgrade()` / `rollback()`；reconcile 版本切换（UPGRADE）；REVOKED 终态覆盖 STOPPED/FAILED/READY；目标 Version 校验（unknown / revoked / snapshot binding / frozen_checks） |
-| `docs/archaeology/unified-runtime/phase10_3/test_phase10_3_stage2.py` | Stage 2 测试：Upgrade ×6 / Rollback ×4 / Revoke ×6 / Failure ×1 / Immutability ×1（18 tests） |
+| `docs/archaeology/unified-runtime/phase10_3/test_phase10_3_stage2.py` | Managed Agent Version Lifecycle State Machine 测试：Upgrade ×6 / Rollback ×4 / Revoke ×6 / Failure ×1 / Immutability ×1 / stop-failure 回归 ×4（22 tests） |
 | `docs/archaeology/unified-runtime/phase10_3/test_phase10_3_stage1.py` | 必要配套：Stage 1 Test D 从“不自动升级”更新为“upgrade 自动切换”；新增 `seed_version` 测试夹具 |
 | `docs/archaeology/unified-runtime/phase10_3/07-version-lifecycle-stage2.md` | 本报告 |
 
@@ -144,6 +144,23 @@ live PASS；生命周期 domain semantics 通过 FakeRuntime 验证。
    “只报告 VERSION_DRIFT”改为“UPGRADE 自动切换”（10.1 §9 冻结的
    UPGRADE action）。
 
+## Review Findings
+
+1. **stop failure blocks target start**：旧 instance stop 返回 FAILED 后，
+   reconcile 返回 `RECONCILE_REQUIRED`，且不启动 target；下一次 reconcile
+   在旧 instance 被确认 `STOPPED` 之前持续阻塞（修复前 FAILED 会直接落入
+   START target 分支）。新增 4 个回归测试覆盖：
+   failed-stop upgrade / next reconcile / confirmed STOPPED -> upgrade /
+   at-most-one-running。
+2. **tests validate state-machine semantics only**：Stage 2 测试使用
+   `seed_version` 直接写 Version 记录，未走 production publish path
+   （`create_version -> registry.promote -> authority -> anchored
+   run_request`）；UPGRADE/ROLLBACK 通过只代表状态机语义，不代表
+   production-live 通过。
+3. **documentation updated**：`pilot/managed_runtime.py` module docstring
+   和 Stage 1 Test D header 已同步为“VERSION_DRIFT / auto-upgrade，且
+   仅当旧 instance 确认 STOPPED 后 target 才允许启动”。
+
 ## Scope Audit
 
 ```text
@@ -159,22 +176,26 @@ git diff --check: 空
 ## Final Verdict
 
 ```text
-PHASE_10_3_STAGE2 = PASS_WITH_FINDINGS
+PHASE_10_3_STAGE2_REVIEW_FIX = PASS
 
-UPGRADE  = PASS（v16→v17；未知/revoked/snapshot 问题 REJECT；幂等）
-ROLLBACK = PASS（v17→v16；旧 snapshot 必须存在且验证通过；幂等）
-REVOKE   = PASS（RUNNING→STOPPING→STOPPED→REVOKED；STOPPED→REVOKED；
-                 new start REJECT；幂等）
+UPGRADE
+    = state-machine PASS
+    != production-live PASS
+ROLLBACK
+    = state-machine PASS
+    != production-live PASS
+REVOKE
+    = state-machine PASS
 
-VERSION_IMMUTABILITY = CLOSED（upgrade/rollback 不改写 Version 记录；
-                  registry 多版本发布本身 = MIGRATION_REQUIRED）
-SNAPSHOT_BINDING = CLOSED（记录级 + frozen_checks 双重校验；
-                  instance identity == target version identity）
-IDEMPOTENCY = CLOSED（upgrade/rollback/revoke/reconcile 均 NO-OP 语义）
-PHASE_9_REGRESSION = PASS（96 passed, 6 subtests）
-LIVE_RUNTIME = UNAVAILABLE（docker.sock permission denied）
+STOP_FAILURE_SAFETY = CLOSED（FAILED old instance -> RECONCILE_REQUIRED；
+                      target 仅在 old confirmed STOPPED 后启动）
+AT_MOST_ONE_RUNNING = CLOSED（stop failure / reconcile retry /
+                      duplicate reconcile 均不产生第二个 RUNNING）
+STATE_MACHINE_TESTS = PASS（22 tests）
+PRODUCTION_MULTI_VERSION = MIGRATION_REQUIRED（registry single-adoption /
+                      per-version run intent 解析未实施）
+LIVE_RUNTIME = UNAVAILABLE（docker.sock permission denied；FakeRuntime
+               domain semantics only）
 
-NEXT_PHASE = Legacy Migration（registry 多版本发布 / per-version run
-              intent 解析）→ Process Supervisor → Real Docker live
-              verification
+NEXT_PHASE = Legacy Migration → Process Supervisor → Live Runtime
 ```

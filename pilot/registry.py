@@ -70,12 +70,19 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
             registry_root: Path, *, adoption_authority: dict | None = None,
             frozen_root=None) -> dict:
     registry_root = Path(registry_root)
-    entry_path = registry_root / family / f"{name}.json"
-
     if adoption_authority is None:
         raise AdoptionBlocked(
             [{"code": "MISSING_AUTHORITY", "message": "promote() requires an AdoptionAuthority"}]
         )
+    is_canonical = (
+        adoption_authority.get("artifact_identity") == CANONICAL_ARTIFACT_IDENTITY_V1
+    )
+    candidate_version = adoption_authority.get("candidate_version") or "v1"
+    if is_canonical:
+        # AgentVersion locator: same Agent keeps one write-once entry per version.
+        entry_path = registry_root / family / name / "versions" / f"{candidate_version}.json"
+    else:
+        entry_path = registry_root / family / f"{name}.json"
     store = load_store(registry_root)
     if store is None:
         raise AdoptionBlocked(
@@ -178,16 +185,51 @@ def promote(family: str, name: str, candidate_dir: Path, evaluation: dict,
         )
 
     manifest = json.loads((cand / "manifest.json").read_text())
-    artifact_dst = registry_root / family / name / "artifact"
+    if is_canonical:
+        artifact_dst = registry_root / family / name / "versions" / candidate_version / "artifact"
+        capability_id = frozen["record"].get("capability_id")
+        versions_dir = registry_root / family / name / "versions"
+        if versions_dir.is_dir():
+            for path in sorted(versions_dir.glob("*.json")):
+                try:
+                    canonical_id = json.loads(path.read_text()).get("capability_id")
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if canonical_id:
+                    capability_id = canonical_id
+                    break
+        legacy_anchor = registry_root / family / f"{name}.json"
+        if legacy_anchor.exists():
+            # Migration rule: an existing agent anchor keeps its identity.
+            try:
+                capability_id = (
+                    json.loads(legacy_anchor.read_text()).get("capability_id")
+                    or capability_id
+                )
+            except (OSError, json.JSONDecodeError):
+                pass
+        if not capability_id:
+            raise AdoptionBlocked(
+                [{"code": "CANONICAL_IDENTITY_MISSING",
+                  "message": "frozen candidate missing deterministic capability_id"}])
+        version_number = (
+            int(candidate_version[1:])
+            if candidate_version.startswith("v") and candidate_version[1:].isdigit()
+            else 1
+        )
+    else:
+        artifact_dst = registry_root / family / name / "artifact"
+        capability_id = "cap-" + uuid.uuid4().hex[:12]
+        version_number = 1
     try:
         shutil.copytree(artifact, artifact_dst)
     except FileExistsError:
         pass  # concurrent same-name promote; exclusive entry create below decides
     entry = {
         "schema_version": "experimental_registry_v1",
-        "capability_id": "cap-" + uuid.uuid4().hex[:12],
+        "capability_id": capability_id,
         "name": name,
-        "version": 1,
+        "version": version_number,
         "family": family,
         "artifact_dir": str(artifact_dst),
         "artifact_identity": artifact_identity,
@@ -253,6 +295,19 @@ def reject(family: str, name: str, candidate_dir: Path, evaluation: dict,
 
 def discover(registry_root: Path, family: str, name: str) -> dict | None:
     entry_path = Path(registry_root) / family / f"{name}.json"
+    if not entry_path.exists():
+        return None
+    entry = json.loads(entry_path.read_text())
+    if entry["state"] != "promoted":
+        return None
+    return entry
+
+
+def discover_version(registry_root: Path, family: str, name: str,
+                     candidate_version: str) -> dict | None:
+    """AgentVersion locator: registry/<family>/<name>/versions/<v>.json."""
+    entry_path = (Path(registry_root) / family / name / "versions"
+                  / f"{candidate_version}.json")
     if not entry_path.exists():
         return None
     entry = json.loads(entry_path.read_text())

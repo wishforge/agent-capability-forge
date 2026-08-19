@@ -33,7 +33,7 @@ from pilot.adoption_authority import (
     revoke_authority,
 )
 from pilot import runtime_adoption_guard as guard
-from pilot.registry import AdoptionBlocked, discover
+from pilot.registry import AdoptionBlocked, discover_version
 
 ROOT = Path(__file__).resolve().parent
 
@@ -110,8 +110,36 @@ def execution_snapshot_identity(candidate_id: str, artifact_digest: str,
     return "snap-" + sha256_bytes(payload)[len("sha256:"):][:16]
 
 
-def _version(state_root: Path, version_id: str) -> dict | None:
-    return _latest(state_root / "versions.jsonl", "version_id", version_id)
+def _version(state_root: Path, agent_id: str | None, version_id: str) -> dict | None:
+    return _latest_version(state_root, agent_id, version_id)
+
+
+def _latest_version(state_root: Path, agent_id: str | None,
+                    version_id: str) -> dict | None:
+    """Latest event for (agent_id, version_id); None agent matches any."""
+    path = state_root / "versions.jsonl"
+    if not path.exists():
+        return None
+    for line in reversed(path.read_text().splitlines()):
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if rec.get("version_id") == version_id and (
+            agent_id is None or rec.get("agent_id") == agent_id
+        ):
+            return rec
+    return None
+
+
+def _versions(state_root: Path) -> list[dict]:
+    current = {}
+    path = state_root / "versions.jsonl"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip():
+                rec = json.loads(line)
+                current[(rec.get("agent_id"), rec.get("version_id"))] = rec
+    return list(current.values())
 
 
 def _version_revoked(version: dict) -> bool:
@@ -159,7 +187,8 @@ def create_version(state_root, registry_root, frozen_root, candidate_id: str,
             json.dumps(frozen["violations"], ensure_ascii=False))
     record = frozen["record"]
     name = record["name"]
-    entry = discover(registry_root, family, name)
+    version_id = f"v{record['version']}"
+    entry = discover_version(registry_root, family, name, version_id)
     if entry is None:
         raise ManagedRuntimeError("REGISTRY_ENTRY_MISSING",
                                   f"family={family} name={name}")
@@ -181,7 +210,8 @@ def create_version(state_root, registry_root, frozen_root, candidate_id: str,
            for e in load_authority_events(registry_root, authority["authority_id"])):
         raise ManagedRuntimeError("VERSION_REVOKED",
                                   f"authority={authority['authority_id']}")
-    run_request = guard.load_trusted_run_request(registry_root)
+    version_key = f"{entry['capability_id']}|{entry['adoption']['candidate_version']}"
+    run_request = guard.load_trusted_run_request(registry_root, version_key)
     if run_request is None:
         raise ManagedRuntimeError("MISSING_RUN_REQUEST",
                                   "canonical candidate requires anchored run_request")
@@ -189,12 +219,16 @@ def create_version(state_root, registry_root, frozen_root, candidate_id: str,
     # seal_digest is carried by the authority record and anchored run_request.
     identity = dict(adoption)
     identity["seal_digest"] = authority.get("seal_digest")
+    if (run_request.get("name") != entry.get("name")
+            or run_request.get("capability_id") != entry.get("capability_id")):
+        raise ManagedRuntimeError(
+            "RUN_REQUEST_MISMATCH",
+            "run_request name/capability_id does not match version entry")
     for key in ("candidate_id", "candidate_version", "artifact_digest", "seal_digest"):
         if run_request.get(key) != identity.get(key):
             raise ManagedRuntimeError("RUN_REQUEST_MISMATCH", f"field={key}")
         if authority.get(key) != identity.get(key):
             raise ManagedRuntimeError("AUTHORITY_MISMATCH", f"field={key}")
-    version_id = f"v{record['version']}"
     if version_id != adoption.get("candidate_version"):
         raise ManagedRuntimeError("VERSION_CONFLICT",
                                   f"frozen version={version_id} "
@@ -220,7 +254,7 @@ def create_version(state_root, registry_root, frozen_root, candidate_id: str,
         "frozen_root": str(frozen_root),
         "created_at": _now(),
     }
-    existing = _latest(state_root / "versions.jsonl", "version_id", version_id)
+    existing = _latest_version(state_root, event["agent_id"], version_id)
     if existing is not None:
         binding = ("candidate_id", "artifact_digest", "seal_digest",
                    "execution_snapshot_identity")
@@ -241,12 +275,14 @@ def _deployment_for_agent(state_root: Path, agent_id: str) -> dict | None:
 
 def create_deployment(state_root, agent_id: str, version_id: str,
                       desired_state: str = "STOPPED") -> dict:
-    """One Deployment per Agent (MVP): idempotent on identical content."""
+    """Deployment per (agent, version, desired) intent; idempotent on an
+    identical existing deployment. Multiple Deployments per Agent are
+    domain-legal (multi-instance scheduling remains a non-goal)."""
     state_root = Path(state_root)
     if desired_state not in DESIRED_STATES:
         raise ManagedRuntimeError("INVALID_DESIRED_STATE",
                                   f"desired_state={desired_state!r}")
-    version = _version(state_root, version_id)
+    version = _version(state_root, agent_id, version_id)
     if version is None:
         raise ManagedRuntimeError("VERSION_NOT_FOUND", f"version_id={version_id}")
     if version["agent_id"] != agent_id:
@@ -257,8 +293,6 @@ def create_deployment(state_root, agent_id: str, version_id: str,
         if existing["version_id"] == version_id \
                 and existing["desired_state"] == desired_state:
             return existing
-        raise ManagedRuntimeError("DEPLOYMENT_CONFLICT",
-                                  f"agent_id={agent_id} already has a deployment")
     dep = {
         "schema": "managed_runtime_v1",
         "event": "deployment_created",
@@ -398,7 +432,7 @@ def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
     and apply the minimal action (START / STOP / UPGRADE / NO-OP / REJECT)."""
     state_root = Path(state_root)
     dep = get_deployment(state_root, deployment_id)
-    version = _version(state_root, dep["version_id"])
+    version = _version(state_root, dep["agent_id"], dep["version_id"])
     if version is None:
         return _report(state_root, dep, "RECONCILE_REQUIRED", "VERSION_NOT_FOUND",
                        reason=f"version_id={dep['version_id']}")
@@ -489,7 +523,7 @@ def reconcile(state_root, deployment_id: str, runtime=None) -> dict:
 
 def _validate_target_version(state_root: Path, dep: dict,
                              target_version_id: str) -> dict:
-    version = _version(state_root, target_version_id)
+    version = _version(state_root, dep["agent_id"], target_version_id)
     if version is None:
         raise ManagedRuntimeError("VERSION_NOT_FOUND",
                                   f"version_id={target_version_id}")
@@ -549,7 +583,7 @@ def get_runtime_status(state_root, instance_id: str) -> dict:
     if inst is None:
         raise ManagedRuntimeError("INSTANCE_NOT_FOUND", f"instance_id={instance_id}")
     dep = get_deployment(state_root, inst["deployment_id"])
-    version = _version(state_root, inst["version_id"])
+    version = _version(state_root, inst["agent_id"], inst["version_id"])
     drift = dep["version_id"] != inst["version_id"]
     binding = version is not None and \
         inst["execution_snapshot_identity"] == version["execution_snapshot_identity"]
@@ -572,11 +606,16 @@ def get_runtime_status(state_root, instance_id: str) -> dict:
 
 
 def revoke_version(state_root, registry_root, version_id: str, *,
+                   agent_id: str | None = None,
                    issuer_id: str, reason: str = "") -> dict:
     """Terminal revoke: authority event -> version REVOKED -> deployments
     desired REVOKED. Idempotent on already-revoked version."""
     state_root, registry_root = Path(state_root), Path(registry_root)
-    version = _version(state_root, version_id)
+    if agent_id is not None:
+        version = _version(state_root, agent_id, version_id)
+    else:
+        matches = [v for v in _versions(state_root) if v["version_id"] == version_id]
+        version = matches[0] if len(matches) == 1 else None
     if version is None:
         raise ManagedRuntimeError("VERSION_NOT_FOUND", f"version_id={version_id}")
     if version.get("state") == "REVOKED":
@@ -591,7 +630,9 @@ def revoke_version(state_root, registry_root, version_id: str, *,
                   "revocation_id": res["revocation_id"], "revoked_at": _now()})
     _append(state_root / "versions.jsonl", event)
     for dep in _current(state_root, "deployments.jsonl", "deployment_id"):
-        if dep["version_id"] == version_id and dep["desired_state"] != "REVOKED":
+        if (dep["agent_id"] == version["agent_id"]
+                and dep["version_id"] == version_id
+                and dep["desired_state"] != "REVOKED"):
             set_desired_state(state_root, dep["deployment_id"], "REVOKED")
     return event
 
@@ -616,11 +657,21 @@ class DockerRuntime:
 
     def start(self, instance: dict, version: dict) -> dict:
         registry_root = Path(version["registry_root"])
-        entry = discover(registry_root, version["family"], version["name"])
-        run_request = guard.load_trusted_run_request(registry_root)
-        if entry is None or run_request is None:
+        entry = discover_version(registry_root, version["family"],
+                                 version["name"], version["version_id"])
+        version_key = f"{version['agent_id']}|{version['candidate_version']}"
+        try:
+            run_request = guard.load_trusted_run_request(registry_root, version_key)
+            if entry is None or run_request is None:
+                return {"observed_state": "FAILED",
+                        "failure_reason": "MISSING_RUN_REQUEST_OR_ENTRY"}
+            if entry.get("capability_id") != version["agent_id"]:
+                return {"observed_state": "FAILED",
+                        "failure_reason": "ENTRY_AGENT_ID_MISMATCH"}
+        except AdoptionBlocked as exc:
             return {"observed_state": "FAILED",
-                    "failure_reason": "MISSING_RUN_REQUEST_OR_ENTRY"}
+                    "failure_reason": exc.report["verdict"] + ": "
+                    + json.dumps(exc.report["violations"], ensure_ascii=False)}
         snapshot = Path(version["frozen_root"]) / "frozen" \
             / version["candidate_id"] / "artifact"
         try:

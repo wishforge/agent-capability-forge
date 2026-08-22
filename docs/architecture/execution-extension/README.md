@@ -16,5 +16,6 @@ execution semantics，Supervisor 在 Managed Runtime 内负责 reconciliation。
 5. [05-artifact-and-recovery.md](05-artifact-and-recovery.md)
 6. [06-supervisor.md](06-supervisor.md)
 7. [07-design-gate.md](07-design-gate.md)
+8. [core-runtime/README.md](core-runtime/README.md) — Phase 4 Core Runtime Semantic Model
 
 这是一份语义边界文档，不是 API / CRD / DB 设计。
